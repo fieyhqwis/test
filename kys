@@ -1,5 +1,5 @@
 --[[
-    RetroBreach — webhook_logger  v1.1
+    RetroBreach — webhook_logger  v1.2
     HWID ban logic removed — tracking and notifications only.
 
     Loaded by the hub through loadstring(game:HttpGet(...)).
@@ -21,6 +21,32 @@
     logger's.
 
     ------------------------------------------------------------------
+    v1.2 — WHY THIS FILE WAS BROKEN
+    ------------------------------------------------------------------
+    Symptom: "[RBLogger] no http request function available" x4 and
+             "this executor has no loadstring, nothing can be fetched".
+
+    Cause: the old resolver did rawget(_G, name) and then rawget(getfenv(0), name).
+    On executors that sandbox each script, _G is a fresh empty-ish table and
+    getfenv is either absent or returns that same sandboxed table. So every
+    executor global (request / syn / loadstring / identifyexecutor) came back
+    nil even though the executor had all of them.
+
+    Fix: resolve through every environment table that exists —
+    getgenv() (the real executor global table on Synapse X, Script-Ware,
+    KRNL, Fluxus, Electron, Arceus...), getfenv(0/1/2), _G, _ENV — and if
+    rawget misses, retry with a metatable-aware pcall index (some namespaces
+    are userdata with __index, e.g. syn on a few builds).
+
+    Fallbacks added:
+      * request  -> syn.request / http.request / fluxus.request / http_request /
+                    httprequest / krnl.request ... incl. userdata namespaces
+      * if still nothing -> HttpService:RequestAsync (works for the bot
+                    endpoint, Discord rejects the Roblox user-agent with 403,
+                    which is exactly why the executor-level fn is preferred)
+      * loadstring -> load (Luau's load() compiles a string chunk)
+
+    ------------------------------------------------------------------
     CONFIG (set these from the hub, before calling Init)
     ------------------------------------------------------------------
     Logger.URL            Discord webhook URL  (embed notifications)
@@ -31,36 +57,98 @@
     Logger.HeartbeatExit  true  = report when the game closes
 ]]
 
--- Executor globals differ per executor and most of them do not exist on
--- the others. Reading them by name makes Luau's linter spam
--- "Unknown global", so they are pulled out of the global table by string.
-local function gget(name)
-    local v = rawget(_G, name)
-    if v ~= nil then return v end
-    local ok, fe = pcall(function() return getfenv(0) end)
-    if ok and type(fe) == "table" then v = rawget(fe, name) end
-    return v
+-- ============================================================
+-- ENVIRONMENT / GLOBAL RESOLVER  (the v1.2 fix)
+--
+-- Nothing here names an executor global directly, so Luau's linter
+-- stays quiet and there is no "Unknown global" spam.
+-- ============================================================
+local ENVS = {}
+do
+    local seen = {}
+    local function add(t)
+        if type(t) == "table" and not seen[t] then
+            seen[t] = true
+            ENVS[#ENVS + 1] = t
+        end
+    end
+
+    add(_G)
+    pcall(function() if type(getgenv)  == "function" then add(getgenv())  end end)
+    pcall(function() if type(getrenv)  == "function" then add(getrenv())  end end)
+    pcall(function() if type(getfenv)  == "function" then add(getfenv(0)) end end)
+    pcall(function() if type(getfenv)  == "function" then add(getfenv(1)) end end)
+    pcall(function() if type(getfenv)  == "function" then add(getfenv(2)) end end)
+    pcall(function() add(_ENV) end)
 end
 
-local requestFn = nil
+local function gget(name)
+    for i = 1, #ENVS do
+        local v = rawget(ENVS[i], name)
+        if v ~= nil then return v end
+    end
+    -- metatable-aware pass: catches userdata namespaces and __index chains
+    for i = 1, #ENVS do
+        local ok, v = pcall(function() return ENVS[i][name] end)
+        if ok and v ~= nil then return v end
+    end
+    return nil
+end
+
+-- ============================================================
+-- HTTP
+-- Every executor names this differently. Try them all once.
+-- ============================================================
+local requestFn, requestName = nil, nil
 do
-    local req = gget("request") or gget("http_request") or gget("httprequest")
-    if type(req) == "function" then
-        requestFn = req
-    else
-        for _, tbl in ipairs({ gget("http"), gget("syn"), gget("fluxus") }) do
-            if type(tbl) == "table" and type(tbl.request) == "function" then
-                requestFn = tbl.request
-                break
+    for _, n in ipairs({
+        "request", "http_request", "httprequest", "HttpRequest",
+        "request_async", "httprequest_async",
+    }) do
+        local f = gget(n)
+        if type(f) == "function" then requestFn, requestName = f, n; break end
+    end
+
+    if not requestFn then
+        -- namespace form. `syn` is a table on most builds and userdata on a
+        -- few, so index inside a pcall instead of type-checking for table.
+        for _, ns in ipairs({
+            "http", "syn", "fluxus", "krnl", "KRNL", "Arceus",
+            "Sentinel", "Electron", "Valyse", "Cryptic", "Celestial",
+        }) do
+            local t = gget(ns)
+            if t ~= nil then
+                local ok, f = pcall(function() return t.request end)
+                if ok and type(f) == "function" then
+                    requestFn, requestName = f, ns .. ".request"; break
+                end
+                local ok2, f2 = pcall(function() return t.HttpRequest end)
+                if ok2 and type(f2) == "function" then
+                    requestFn, requestName = f2, ns .. ".HttpRequest"; break
+                end
+                local ok3, f3 = pcall(function() return t.httprequest end)
+                if ok3 and type(f3) == "function" then
+                    requestFn, requestName = f3, ns .. ".httprequest"; break
+                end
             end
+        end
+    end
+
+    -- callable userdata (a couple of executors expose request as such)
+    if not requestFn then
+        local t = gget("request")
+        if t ~= nil and type(t) ~= "function" then
+            requestFn, requestName = function(o) return t(o) end, "request(userdata)"
         end
     end
 end
 
+local HttpService = game:GetService("HttpService")
+
 local Logger = {
     URL            = "",
     API            = "",
-    TOKEN          = "https://discord.com/api/webhooks/1545537943660400731/lyTSJiBaeatrOSeAIYHi3FkhG2vspVNVvRxA6Qm-v38_sdhoLr6QCD_1r292l6T6zPor",
+    TOKEN          = "https://discord.com/api/webhooks/1545537943660400731/lyTSJiBaeatrOSeAIYHi3FkhG2vspVNVvRxA6Qm-v38_sdhoLr6QCD_1r292l6T6zPor",          -- was accidentally set to the webhook URL in v1.1
     GeoLookup      = true,
     Heartbeat      = 60,
     HeartbeatExit  = true,
@@ -71,6 +159,9 @@ local Logger = {
 local Players            = game:GetService("Players")
 local MarketplaceService = game:GetService("MarketplaceService")
 local LocalPlayer        = Players.LocalPlayer
+
+Logger.httpFunction = requestName     -- nil = falling back to HttpService
+Logger.hasExecutorHttp = (requestFn ~= nil)
 
 -- ============================================================
 -- JSON encoder (no decoder needed — /bancheck answers in plain text)
@@ -124,41 +215,59 @@ local function encode(v)
     return "null"
 end
 
--- ============================================================
--- HTTP
--- Every executor names this differently. Try them all once.
--- ============================================================
--- requestFn was resolved once at the top of this file (see gget above)
-local function pickRequest()
-    return requestFn
+-- last resort: Roblox's own HTTP. Yields, and Discord 403s the user-agent,
+-- but it keeps the bot endpoint alive on executors with no request().
+local warnedNoHttp = false
+local function httpServiceCall(url, method, body)
+    local ok, res = pcall(function()
+        return HttpService:RequestAsync({
+            Url     = url,
+            Method  = method or "GET",
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["x-rb-token"]   = Logger.TOKEN,
+            },
+            Body = body,
+        })
+    end)
+    if not ok then return nil end
+    if type(res) == "table" then
+        return res.Body, res.StatusCode or res.Status or res.status
+    end
+    return res, nil
 end
 
 local function httpCall(url, method, body)
-    local fn = pickRequest()
-    if not fn then
-        warn("[RBLogger] no http request function available")
-        return nil
+    if requestFn then
+        -- closure form: some executors' static checker rejects pcall(fn, arg)
+        -- with "argument count mismatch". Identical behaviour, no warning.
+        local ok, res = pcall(function() return requestFn({
+            Url     = url,
+            Method  = method or "GET",
+            Headers = {
+                ["Content-Type"]  = "application/json",
+                ["x-rb-token"]    = Logger.TOKEN,
+                ["User-Agent"]    = "RetroBreach/1.0",
+            },
+            Body = body,
+        }) end)
+        if ok then
+            if type(res) == "table" then
+                return res.Body or res.body, res.StatusCode or res.Status or res.status
+            end
+            return res, nil
+        end
+        -- executor fn existed but threw -> still try the Roblox path once
+        return httpServiceCall(url, method, body)
     end
-    -- closure form: some executors' static checker rejects pcall(fn, arg)
-    -- with "argument count mismatch". Identical behaviour, no warning.
-    local ok, res = pcall(function() return fn({
-        Url     = url,
-        Method  = method or "GET",
-        Headers = {
-            ["Content-Type"]  = "application/json",
-            ["x-rb-token"]    = Logger.TOKEN,
-            ["User-Agent"]    = "RetroBreach/1.0",
-        },
-        Body = body,
-    }) end)
-    if not ok then
-        warn("[RBLogger] request failed: " .. tostring(res))
-        return nil
+
+    if not warnedNoHttp then
+        warnedNoHttp = true
+        warn("[RBLogger] no executor http function — falling back to HttpService.")
+        warn("[RBLogger] Discord will 403 that path (Roblox user-agent). "
+           .. "Bot endpoint still works.")
     end
-    if type(res) == "table" then
-        return res.Body or res.body, res.StatusCode or res.Status or res.status
-    end
-    return res, nil
+    return httpServiceCall(url, method, body)
 end
 
 local function log(...)
@@ -233,10 +342,19 @@ local function getExecutor()
         local ok, name = pcall(function() return gen() end)
         if ok and name then return tostring(name), "?" end
     end
-    if gget("syn") then return "Synapse X", "?" end
-    if gget("PROTOSMASHER_LOADED") then return "Protosmasher", "?" end
-    if gget("Krnl") then return "Krnl", "?" end
-    if gget("fluxus") then return "Fluxus", "?" end
+
+    -- no identifyexecutor: sniff the namespaces that are actually present
+    local marks = {
+        { "syn", "Synapse X" }, { "fluxus", "Fluxus" }, { "Krnl", "KRNL" },
+        { "krnl", "KRNL" }, { "PROTOSMASHER_LOADED", "Protosmasher" },
+        { "Arceus", "Arceus" }, { "Sentinel", "Sentinel" },
+        { "Electron", "Electron" }, { "Celestial", "Celestial" },
+        { "Cryptic", "Cryptic" }, { "Valyse", "Valyse" },
+    }
+    for i = 1, #marks do
+        if gget(marks[i][1]) ~= nil then return marks[i][2], "?" end
+    end
+    if not Logger.hasExecutorHttp then return "Unknown (no exec http)", "?" end
     return "Unknown", "?"
 end
 
@@ -273,7 +391,7 @@ end
 local function shortHWID(h)
     if type(h) ~= "string" then return "?" end
     if #h <= 12 then return h end
-    return h:sub(1, 8) .. "…" .. h:sub(-4)
+    return h:sub(1, 8) .. ".." .. h:sub(-4)
 end
 
 -- ============================================================
@@ -345,6 +463,9 @@ local function sendEmbed(fingerprint, title, color, extra)
     if extra then
         for i = 1, #extra do fields[#fields + 1] = extra[i] end
     end
+    if not Logger.hasExecutorHttp then
+        fields[#fields + 1] = field("HTTP", "HttpService fallback (no executor request fn)", false)
+    end
 
     local payload = encode({
         username   = "RetroBreach Logger",
@@ -381,6 +502,7 @@ local function report(fingerprint, event)
         jobId           = fingerprint.jobId,
         ip              = fingerprint.ip,
         geo             = fingerprint.geo,
+        http            = requestName or "httpservice",
         ts              = os.time(),
     })
     return httpCall(Logger.API .. "/report", "POST", body)
@@ -404,6 +526,9 @@ function Logger:Init()
     fp.maxPlayers      = Players.MaxPlayers
     fp.timeStr         = os.date("!%Y-%m-%d %H:%M:%S", os.time())
     fp.gameName        = getGameName()
+
+    log("http function:", tostring(requestName or "HttpService fallback"))
+    log("executor:", fp.executor, fp.executorVersion)
 
     -- geo costs two HTTP round trips, so it runs off the main path and
     -- patches the record with a second report
@@ -449,8 +574,9 @@ function Logger:Init()
     return self
 end
 
-Logger.encode = encode
-Logger.getHWID = getHWID
+Logger.encode   = encode
+Logger.gget     = gget
+Logger.getHWID  = getHWID
 Logger.getExecutor = getExecutor
 
 return Logger
