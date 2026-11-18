@@ -379,7 +379,7 @@ local function bugTargets()
     if type(bugs) == "table" then
         for _, entry in pairs(bugs) do
             local point = bugWeakPoint(entry)
-            if point then list[#list + 1] = { pos = point, health = tonumber(entry.Health) } end
+            if point then list[#list + 1] = { pos = point, id = tonumber(entry.Id), health = tonumber(entry.Health) } end
         end
     end
     return list
@@ -401,6 +401,9 @@ end
 
 local aimEnabled = false
 local aimKeyOption = nil
+local headKeyOption = nil
+local headEnabled = false
+local lastHeadPacket = 0
 
 local function aimHeld()
     if not aimKeyOption then return false end
@@ -408,8 +411,7 @@ local function aimHeld()
     return ok and state == true
 end
 
-local function wallClear(targetPos)
-    local cam = workspace.CurrentCamera
+local function wallClear(targetPos)    local cam = workspace.CurrentCamera
     if not cam then return false end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
@@ -424,8 +426,47 @@ local function wallClear(targetPos)
     return (hit.Position - targetPos).Magnitude < 3
 end
 
-RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 2, function()
-    if not aimEnabled or not aimHeld() then return end
+local hitsRemote = nil
+
+local function gunHitsRemote()
+    if hitsRemote then return hitsRemote end
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local remotesFolder = shared and shared:FindFirstChild("Remotes")
+    local mod = remotesFolder and remotesFolder:FindFirstChild("Remotes")
+    if not mod then return nil end
+    local ok, Remotes = pcall(function() return require(mod) end)
+    if not ok or type(Remotes) ~= "table" or type(Remotes.Event) ~= "function" then return nil end
+    local ok2, remote = pcall(function() return Remotes.Event("GunHits") end)
+    if ok2 then hitsRemote = remote end
+    return hitsRemote
+end
+
+local function sendHeadPacket()
+    local remote = gunHitsRemote()
+    local cam = workspace.CurrentCamera
+    if not (remote and cam) then return end
+
+    local targets = bugTargets()
+    if #targets == 0 then return end
+
+    local hits = {}
+    local heading = nil
+    for _, t in ipairs(targets) do
+        if #hits >= 6 then break end
+        if t.id then
+            local sp, on = cam:WorldToViewportPoint(t.pos)
+            if on and sp.Z > 0 and (t.pos - cam.CFrame.Position).Magnitude < 300 and wallClear(t.pos) then
+                hits[#hits + 1] = { t.id, true, 0, 0, false }
+                heading = heading or (t.pos - cam.CFrame.Position).Unit
+            end
+        end
+    end
+
+    if #hits == 0 then return end
+    pcall(function() remote:FireServer(hits, heading or Vector3.new(0, 0, 1)) end)
+end
+
+RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 2, function()    if not aimEnabled or not aimHeld() then return end
     local cam = workspace.CurrentCamera
     if not cam then return end
 
@@ -570,6 +611,29 @@ end
 
 aimKeyOption = Options.WeakBind
 
+box:AddToggle("HeadPacket", {
+    Text = "Headshot packet (hold key)",
+    Default = false,
+    Tooltip = "Sends a head-flagged hit for visible bugs. Only counts when your own shot is registering.",
+    Callback = function(v)
+        headEnabled = v
+        notify("Headshot packet " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.HeadPacket then
+    pcall(function()
+        Toggles.HeadPacket:AddKeyPicker("HeadBind", {
+            Text = "Headshot bind (hold)",
+            Default = "None",
+            Mode = "Hold",
+            SyncToggleState = false,
+        })
+    end)
+end
+
+headKeyOption = Options.HeadBind
+
 box:AddDivider("Abilities")
 
 box:AddToggle("Turret", {
@@ -595,6 +659,20 @@ task.spawn(function()
                 S.Grenades and "99" or "normal"))
         end)
         task.wait(0.5)
+    end
+end)
+
+task.spawn(function()
+    task.wait(2)
+    while getgenv().__rat4080Hive do
+        task.wait(0.05)
+        if headEnabled and headKeyOption then
+            local ok, state = pcall(function() return headKeyOption:GetState() end)
+            if ok and state and os.clock() - lastHeadPacket > 0.12 then
+                lastHeadPacket = os.clock()
+                pcall(sendHeadPacket)
+            end
+        end
     end
 end)
 
