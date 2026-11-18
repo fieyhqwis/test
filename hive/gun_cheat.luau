@@ -29,7 +29,7 @@ local S = {
     RapidMult = 1.3,
     WeakAim = false,
     AimStrength = 0.35,
-    HeadAll = true,
+    HeadAll = false,
     Grenades = false,
     Turret = false,
 }
@@ -400,6 +400,18 @@ local function nestTargets()
     return list
 end
 
+-- lobby firing range: the centre plate is the weak spot
+local function rangeTargets()
+    local list = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") and (v.Name == "Weakpoint" or v.Name == "WeakPoint") then
+            list[#list + 1] = { pos = v.Position }
+            if #list >= 12 then break end
+        end
+    end
+    return list
+end
+
 local aimEnabled = false
 local aimKeyOption = nil
 local headKeyOption = nil
@@ -480,6 +492,7 @@ RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value +
     if not cam then return end
 
     local targets = bugTargets()
+    if #targets == 0 then targets = rangeTargets() end
     if #targets == 0 then targets = nestTargets() end
     if #targets == 0 then return end
 
@@ -620,17 +633,6 @@ end
 
 aimKeyOption = Options.WeakBind
 
-box:AddToggle("HeadAll", {
-    Text = "All hits = headshot",
-    Default = true,
-    Tooltip = "Rewrites the head flag in every hit packet before it leaves the client.",
-    Callback = function(v)
-        S.HeadAll = v
-        if v then installHeadHook() else uninstallHeadHook() end
-        notify("Headshot rewrite " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
 box:AddDivider("Abilities")
 
 box:AddToggle("Turret", {
@@ -663,9 +665,6 @@ task.spawn(function()
     task.wait(2)
     while getgenv().__rat4080Hive do
         task.wait(1)
-        if S.HeadAll then
-            pcall(installHeadHook)
-        end
     end
 end)
 
