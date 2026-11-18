@@ -27,6 +27,7 @@ local S = {
     Magazine = 0,       -- 0 = leave the real magazine alone
     Rapid = true,
     RapidMult = 1.3,
+    AimStrength = 0.35,
     Grenades = false,
     Turret = false,
 }
@@ -304,22 +305,17 @@ end
 
 local function partWeakSpot(model)
     if not model or typeof(model) ~= "Instance" then return nil end
-    for _, name in ipairs({ "Head", "Weak", "WeakPoint", "Core", "Eye", "Glow" }) do
+    for _, name in ipairs({ "Head", "Weak", "WeakPoint", "Core", "Eye", "Yolk", "Glow" }) do
         local p = model:FindFirstChild(name, true)
         if p and p:IsA("BasePart") then return p end
     end
-    local best, bestY = nil, -math.huge
-    for _, d in ipairs(model:GetDescendants()) do
-        if d:IsA("BasePart") and d.Position.Y > bestY then
-            best, bestY = d, d.Position.Y
-        end
-    end
-    return best
+    return nil
 end
 
 local function bugModels()
     local list = {}
     local ctrl = bugController()
+
     local bugs = ctrl and ctrl._bugs
     if type(bugs) == "table" then
         for _, entry in pairs(bugs) do
@@ -331,21 +327,31 @@ local function bugModels()
             end
         end
     end
+
+    -- nests are the weak core targets when no swarm is up
+    local nests = workspace:FindFirstChild("Nests")
+    if nests then
+        for _, nest in ipairs(nests:GetChildren()) do
+            list[#list + 1] = nest
+        end
+    end
+
     return list
 end
 
 local aimEnabled = false
 
-connect(RunService.RenderStepped, function()
+RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 8, function()
     if not aimEnabled then return end
     local cam = workspace.CurrentCamera
-    local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
-    if not cam or not hum then return end
+    if not cam then return end
 
     local models = bugModels()
     if #models == 0 then return end
 
     local camPos = cam.CFrame.Position
+    local viewport = cam.ViewportSize
+    local center = viewport * 0.5
     local bestPart, bestScore = nil, math.huge
 
     for _, model in ipairs(models) do
@@ -353,19 +359,26 @@ connect(RunService.RenderStepped, function()
         if part then
             local sp, on = cam:WorldToViewportPoint(part.Position)
             if on and sp.Z > 0 then
-                local screenDist = (Vector2.new(sp.X, sp.Y) - cam.ViewportSize * 0.5).Magnitude
+                local screenDist = (Vector2.new(sp.X, sp.Y) - center).Magnitude
                 local worldDist = (part.Position - camPos).Magnitude
-                local score = screenDist + worldDist * 0.15
-                if screenDist < 520 and score < bestScore then
-                    bestScore, bestPart = score, part
+                if screenDist < 180 and worldDist < 400 then
+                    local score = screenDist + worldDist * 0.1
+                    if score < bestScore then
+                        bestScore, bestPart = score, part
+                    end
                 end
             end
         end
     end
 
-    if bestPart then
-        cam.CFrame = CFrame.lookAt(camPos, bestPart.Position)
-    end
+    if not bestPart then return end
+
+    local current = cam.CFrame.LookVector
+    local want = (bestPart.Position - camPos).Unit
+    local alpha = math.clamp(S.AimStrength, 0.05, 1)
+    local blended = current:Lerp(want, alpha)
+    if blended.Magnitude < 0.01 then return end
+    cam.CFrame = CFrame.lookAt(camPos, camPos + blended.Unit)
 end)
 
 --=========================================================
@@ -443,11 +456,21 @@ box:AddDivider("Aim")
 box:AddToggle("WeakAim", {
     Text = "Aim at weak spot",
     Default = false,
-    Tooltip = "Keeps the crosshair on the head/weak part of the nearest bug, so body shots land on the weak spot.",
+    Tooltip = "Smoothly pulls the crosshair onto the weak part (head / core) of the nearest target on screen.",
     Callback = function(v)
         aimEnabled = v
         notify("Weak spot aim " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
+})
+
+box:AddSlider("AimStrength", {
+    Text = "Aim strength",
+    Default = S.AimStrength,
+    Min = 0.05,
+    Max = 1,
+    Rounding = 2,
+    Tooltip = "0.2 = мягкая подтяжка, 0.5 = заметная, 1 = резкий снап. Ниже 0.4 камера не дёргается.",
+    Callback = function(v) S.AimStrength = v end,
 })
 
 if Toggles.WeakAim then
@@ -531,6 +554,7 @@ getgenv().__rat4080Hive = {
 
 Library:OnUnload(function()
     restoreAll()
+    pcall(function() RunService:UnbindFromRenderStep("RAT4080WeakAim") end)
     for _, c in ipairs(Signals) do pcall(function() c:Disconnect() end) end
     getgenv().__rat4080Hive = nil
 end)
