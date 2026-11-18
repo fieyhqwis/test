@@ -424,7 +424,7 @@ local function wallClear(targetPos)
     return (hit.Position - targetPos).Magnitude < 3
 end
 
-RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 8, function()
+RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 2, function()
     if not aimEnabled or not aimHeld() then return end
     local cam = workspace.CurrentCamera
     if not cam then return end
