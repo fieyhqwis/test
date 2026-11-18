@@ -29,6 +29,7 @@ local S = {
     RapidMult = 1.3,
     WeakAim = false,
     AimStrength = 0.35,
+    HeadAll = true,
     Grenades = false,
     Turret = false,
 }
@@ -441,29 +442,37 @@ local function gunHitsRemote()
     return hitsRemote
 end
 
-local function sendHeadPacket()
-    local remote = gunHitsRemote()
-    local cam = workspace.CurrentCamera
-    if not (remote and cam) then return end
+-- every shot you register is rewritten as a head hit before it leaves the client
+local sendHitsOriginal = nil
 
-    local targets = bugTargets()
-    if #targets == 0 then return end
-
-    local hits = {}
-    local heading = nil
-    for _, t in ipairs(targets) do
-        if #hits >= 6 then break end
-        if t.id then
-            local sp, on = cam:WorldToViewportPoint(t.pos)
-            if on and sp.Z > 0 and (t.pos - cam.CFrame.Position).Magnitude < 300 and wallClear(t.pos) then
-                hits[#hits + 1] = { t.id, true, 0, 0, false }
-                heading = heading or (t.pos - cam.CFrame.Position).Unit
+local function installHeadHook()
+    local gun = gunController()
+    if not gun or sendHitsOriginal or type(gun._sendHits) ~= "function" then return false end
+    sendHitsOriginal = gun._sendHits
+    gun._sendHits = function(self, t)
+        if S.HeadAll then
+            local hits = self._hits
+            if type(hits) == "table" then
+                for i = 1, #hits do
+                    local entry = hits[i]
+                    if type(entry) == "table" and type(entry[1]) == "number" then
+                        entry[2] = true
+                        entry[3] = 0
+                        entry[4] = 0
+                        entry[5] = false
+                    end
+                end
             end
         end
+        return sendHitsOriginal(self, t)
     end
+    return true
+end
 
-    if #hits == 0 then return end
-    pcall(function() remote:FireServer(hits, heading or Vector3.new(0, 0, 1)) end)
+local function uninstallHeadHook()
+    local gun = gunController()
+    if gun and sendHitsOriginal then gun._sendHits = sendHitsOriginal end
+    sendHitsOriginal = nil
 end
 
 RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 2, function()    if not aimEnabled or not aimHeld() then return end
@@ -611,28 +620,16 @@ end
 
 aimKeyOption = Options.WeakBind
 
-box:AddToggle("HeadPacket", {
-    Text = "Headshot packet (hold key)",
-    Default = false,
-    Tooltip = "Sends a head-flagged hit for visible bugs. Only counts when your own shot is registering.",
+box:AddToggle("HeadAll", {
+    Text = "All hits = headshot",
+    Default = true,
+    Tooltip = "Rewrites the head flag in every hit packet before it leaves the client.",
     Callback = function(v)
-        headEnabled = v
-        notify("Headshot packet " .. (v and "ON" or "OFF"), v and "check" or "x")
+        S.HeadAll = v
+        if v then installHeadHook() else uninstallHeadHook() end
+        notify("Headshot rewrite " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
-
-if Toggles.HeadPacket then
-    pcall(function()
-        Toggles.HeadPacket:AddKeyPicker("HeadBind", {
-            Text = "Headshot bind (hold)",
-            Default = "None",
-            Mode = "Hold",
-            SyncToggleState = false,
-        })
-    end)
-end
-
-headKeyOption = Options.HeadBind
 
 box:AddDivider("Abilities")
 
@@ -665,13 +662,9 @@ end)
 task.spawn(function()
     task.wait(2)
     while getgenv().__rat4080Hive do
-        task.wait(0.05)
-        if headEnabled and headKeyOption then
-            local ok, state = pcall(function() return headKeyOption:GetState() end)
-            if ok and state and os.clock() - lastHeadPacket > 0.12 then
-                lastHeadPacket = os.clock()
-                pcall(sendHeadPacket)
-            end
+        task.wait(1)
+        if S.HeadAll then
+            pcall(installHeadHook)
         end
     end
 end)
@@ -723,6 +716,7 @@ getgenv().__rat4080Hive = {
 
 Library:OnUnload(function()
     restoreAll()
+    uninstallHeadHook()
     pcall(function() RunService:UnbindFromRenderStep("RAT4080WeakAim") end)
     for _, c in ipairs(Signals) do pcall(function() c:Disconnect() end) end
     getgenv().__rat4080Hive = nil
