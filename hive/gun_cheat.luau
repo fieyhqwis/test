@@ -23,9 +23,11 @@ local CFG = {
 local S = {
     NoRecoil = true,
     NoSpread = true,
-    Infinite = true,   -- forces every magazine to InfiniteSize
+    Infinite = false,  -- off: ammo stays finite, magazine size is what changes
     InfiniteSize = 9999,
-    Magazine = 0,      -- extra slider, applies on top when Infinite is off
+    Magazine = 60,     -- custom magazine size
+    Rapid = true,
+    RapidMult = 1.3,
 }
 
 local Library, Window, Toggles, Options
@@ -138,6 +140,7 @@ local function snapshot(def)
     local copy = {
         Spread = def.Spread,
         Magazine = def.Magazine,
+        Rate = def.Rate,
         Recoil = def.Recoil and {
             Back = def.Recoil.Back,
             Jitter = def.Recoil.Jitter,
@@ -212,6 +215,11 @@ local function applyAll()
                 def.Magazine = magTarget
             end
 
+            local orig = originals[keyOf(def)]
+            if orig and type(orig.Rate) == "number" then
+                def.Rate = S.Rapid and (orig.Rate * S.RapidMult) or orig.Rate
+            end
+
             n = n + 1
         end
     end
@@ -228,6 +236,7 @@ local function restoreAll()
             if orig then
                 def.Spread = orig.Spread
                 def.Magazine = orig.Magazine
+                def.Rate = orig.Rate
                 if orig.AimRef then orig.AimRef.Spread = orig.AimSpread end
                 if def.Bloom and orig.Bloom then
                     def.Bloom.PerShot = orig.Bloom.PerShot
@@ -335,44 +344,47 @@ if Toggles.NoSpread then
     end)
 end
 
-box:AddToggle("Infinite", {
-    Text = "Infinite ammo",
-    Default = true,
-    Tooltip = "Rewrites every magazine to a huge size. Works on weapons added after the script loaded too.",
-    Callback = function(v)
-        S.Infinite = v
-        refresh()
-        notify("Infinite ammo " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
-if Toggles.Infinite then
-    pcall(function()
-        Toggles.Infinite:AddKeyPicker("AmmoBind", { Text = "Infinite ammo bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
-    end)
-end
-
-box:AddSlider("InfiniteSize", {
-    Text = "Infinite mag size",
-    Default = S.InfiniteSize,
-    Min = 100,
-    Max = 9999,
-    Rounding = 0,
-    Callback = function(v) S.InfiniteSize = v; refresh() end,
-})
-
 box:AddSlider("Magazine", {
     Text = "Magazine size",
     Default = S.Magazine,
     Min = 0,
     Max = 300,
     Rounding = 0,
-    Tooltip = "0 keeps the real magazine. Keep it modest, a 9999 mag is obvious in the kill feed.",
+    Tooltip = "0 keeps the real magazine. This is a bigger mag, not infinite ammo.",
     Callback = function(v)
         S.Magazine = v
         refresh()
         saveConfig()
     end,
+})
+
+box:AddDivider("Fire rate")
+
+box:AddToggle("Rapid", {
+    Text = "Faster fire",
+    Default = true,
+    Tooltip = "Small multiplier on the fire rate of your weapon.",
+    Callback = function(v)
+        S.Rapid = v
+        refresh()
+        notify("Faster fire " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.Rapid then
+    pcall(function()
+        Toggles.Rapid:AddKeyPicker("RapidBind", { Text = "Faster fire bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
+box:AddSlider("RapidMult", {
+    Text = "Fire rate x",
+    Default = S.RapidMult,
+    Min = 1.05,
+    Max = 2.5,
+    Rounding = 2,
+    Tooltip = "1.3 = +30% rate. Above 1.6 the server starts eating shots.",
+    Callback = function(v) S.RapidMult = v; refresh(); saveConfig() end,
 })
 
 box:AddButton({
@@ -397,24 +409,18 @@ task.spawn(function()
             if S.NoRecoil or S.NoSpread or S.Infinite or S.Magazine > 0 then
                 refresh()
             end
-            local mag = S.Infinite and S.InfiniteSize or (S.Magazine > 0 and S.Magazine or nil)
-            status:SetText(string.format("patched %d types  ·  recoil %s  ·  spread %s  ·  mag %s",
+            local mag = S.Magazine > 0 and S.Magazine or nil
+            status:SetText(string.format("patched %d types  ·  recoil %s  ·  spread %s  ·  mag %s  ·  rate x%.2f",
                 patched,
                 S.NoRecoil and "off" or "on",
                 S.NoSpread and "off" or "on",
-                mag and tostring(mag) or "real"))
+                mag and tostring(mag) or "real",
+                S.Rapid and S.RapidMult or 1))
         end)
     end
 end)
 
--- ammo lives in the gun controller, not in the config, so top it up often
-task.spawn(function()
-    task.wait(1)
-    while getgenv().__rat4080Hive do
-        pcall(topUpAmmo)
-        task.wait(0.2)
-    end
-end)
+-- ammo stays finite on purpose: no top-up loop here.
 
 local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
 
@@ -427,9 +433,15 @@ Library.ToggleKeybind = Options.MenuKeybind
 
 do
     local saved = loadConfig()
-    if saved and type(saved.Magazine) == "number" then
-        S.Magazine = math.clamp(saved.Magazine, 0, 300)
-        pcall(function() Options.Magazine:SetValue(S.Magazine) end)
+    if saved then
+        if type(saved.Magazine) == "number" then
+            S.Magazine = math.clamp(saved.Magazine, 0, 300)
+            pcall(function() Options.Magazine:SetValue(S.Magazine) end)
+        end
+        if type(saved.RapidMult) == "number" then
+            S.RapidMult = math.clamp(saved.RapidMult, 1.05, 2.5)
+            pcall(function() Options.RapidMult:SetValue(S.RapidMult) end)
+        end
     end
 end
 
@@ -437,13 +449,15 @@ end
 -- Force the real defaults here, then patch.
 S.NoRecoil = true
 S.NoSpread = true
-S.Infinite = true
+S.Rapid = true
+S.Infinite = false
 pcall(function() Toggles.NoRecoil:SetValue(true) end)
 pcall(function() Toggles.NoSpread:SetValue(true) end)
-pcall(function() Toggles.Infinite:SetValue(true) end)
+pcall(function() Toggles.Rapid:SetValue(true) end)
 S.NoRecoil = true
 S.NoSpread = true
-S.Infinite = true
+S.Rapid = true
+S.Infinite = false
 
 refresh()
 
