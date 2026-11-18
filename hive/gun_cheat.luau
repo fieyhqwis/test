@@ -1,6 +1,6 @@
 --=====================================================================
 --  RAT 4080 — INTO THE HIVE · GUN CHEAT
---  Client-side only: recoil, spread, magazine. Nothing visible to others.
+--  Patches the weapon def the client actually fires with.
 --=====================================================================
 
 local Players = game:GetService("Players")
@@ -12,7 +12,7 @@ local LP = Players.LocalPlayer
 local CFG = {
     HubName = "RAT 4080",
     WindowTitle = "RAT 4080  //  HIVE GUNS",
-    Footer = "recoil · spread · mag",
+    Footer = "recoil · spread · mag · rate",
     Icon = "crosshair",
     Repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/",
     MenuKey = "RightShift",
@@ -23,9 +23,7 @@ local CFG = {
 local S = {
     NoRecoil = true,
     NoSpread = true,
-    Infinite = false,  -- off: ammo stays finite, magazine size is what changes
-    InfiniteSize = 9999,
-    Magazine = 100,
+    Magazine = 0,       -- 0 = leave the real magazine alone
     Rapid = true,
     RapidMult = 1.3,
     Grenades = false,
@@ -94,7 +92,7 @@ local function notify(text, icon)
 end
 
 --=========================================================
---  CONFIG FILE (sliders only, toggles always start on)
+--  CONFIG FILE
 --=========================================================
 local saveQueued = false
 
@@ -105,7 +103,9 @@ local function saveConfig()
         saveQueued = false
         pcall(function()
             if makefolder and not isfolder(CFG.ConfigDir) then makefolder(CFG.ConfigDir) end
-            writefile(CFG.ConfigPath, HttpService:JSONEncode({ Magazine = S.Magazine }))
+            writefile(CFG.ConfigPath, HttpService:JSONEncode({
+                Magazine = S.Magazine, RapidMult = S.RapidMult,
+            }))
         end)
     end)
 end
@@ -120,184 +120,158 @@ local function loadConfig()
 end
 
 --=========================================================
---  GUN CONFIG PATCH
+--  MODULES
 --=========================================================
-local originals = {}
+local combatFolder = nil
+local function combat()
+    if not combatFolder then
+        local shared = ReplicatedStorage:FindFirstChild("Shared")
+        combatFolder = shared and shared:FindFirstChild("Combat")
+    end
+    return combatFolder
+end
 
 local function getGuns()
-    local ok, mod = pcall(function() return require(ReplicatedStorage.Shared.Combat.Guns) end)
-    if not ok or type(mod) ~= "table" or type(mod.Types) ~= "table" then return nil end
-    local n = 0
-    for _ in pairs(mod.Types) do n = n + 1 end
-    if n == 0 then return nil end
-    return mod
+    local C = combat()
+    if not C then return nil end
+    local ok, mod = pcall(function() return require(C.Guns) end)
+    if ok and type(mod) == "table" and type(mod.Types) == "table" then return mod end
+    return nil
 end
 
-local function keyOf(def)
-    return def.Name or tostring(def)
+local loaderModule = nil
+local function gunController()
+    if not loaderModule then
+        local ok, loader = pcall(function()
+            return require(LP.PlayerScripts.Client.Framework.ControllerLoader)
+        end)
+        if ok then loaderModule = loader end
+    end
+    local map = loaderModule and loaderModule._map
+    return map and map.GunController or nil
 end
 
-local function snapshot(def)
-    local key = keyOf(def)
-    if originals[key] then return originals[key] end
-    local copy = {
-        Spread = def.Spread,
-        Magazine = def.Magazine,
-        Rate = def.Rate,
-        Recoil = def.Recoil and {
-            Back = def.Recoil.Back,
-            Jitter = def.Recoil.Jitter,
-        },
-        Kick = def.Kick and {
-            Up = def.Kick.Up,
-            Side = def.Kick.Side,
-            Back = def.Kick.Back,
-        },
-        Bloom = def.Bloom and {
-            PerShot = def.Bloom.PerShot,
-            Max = def.Bloom.Max,
-        },
-        AimRef = def.Aim,
-        AimSpread = def.Aim and def.Aim.Spread,
-        Pattern = {},
-    }
-    if def.Recoil and type(def.Recoil.Pattern) == "table" then
-        for i, step in ipairs(def.Recoil.Pattern) do
-            copy.Pattern[i] = { step[1], step[2] }
+--=========================================================
+--  WEAPON PATCH
+--=========================================================
+-- base[name] keeps the untouched values, written* keeps what we last wrote,
+-- so an augments/level rewrite is picked up without stacking multipliers.
+local base = getgenv().__rat4080HiveBase
+if type(base) ~= "table" then
+    base = {}
+    getgenv().__rat4080HiveBase = base
+end
+
+local function stateFor(name, def)
+    local st = base[name]
+    if not st then
+        st = { rate = def.Rate, mag = def.Magazine }
+        base[name] = st
+    end
+    return st
+end
+
+local function modDef(def, name)
+    if type(def) ~= "table" or type(name) ~= "string" then return false end
+    local st = stateFor(name, def)
+
+    if S.NoSpread then
+        def.Spread = 0
+        if def.Aim then def.Aim.Spread = 0 end
+        if def.Bloom then
+            def.Bloom.PerShot = 0
+            def.Bloom.Max = 0
         end
     end
-    originals[key] = copy
-    return copy
-end
 
+    if S.NoRecoil then
+        if def.Recoil then
+            def.Recoil.Back = 0
+            def.Recoil.Jitter = { Up = 0, Side = 0 }
+            if type(def.Recoil.Pattern) == "table" then
+                for _, step in ipairs(def.Recoil.Pattern) do
+                    step[1] = 0
+                    step[2] = 0
+                end
+            end
+        end
+        if def.Kick then
+            def.Kick.Up = 0
+            def.Kick.Side = 0
+            def.Kick.Back = 0
+        end
+    end
+
+    if S.Magazine > 0 and type(st.mag) == "number" and st.mag > 0 then
+        def.Magazine = S.Magazine
+    end
+
+    if type(st.rate) == "number" then
+        local rate = st.rate
+        if S.Rapid then
+            rate = rate * S.RapidMult
+        end
+        -- never write something absurd, that is how a gun stops shooting
+        if rate >= 0.2 and rate <= 500 then
+            def.Rate = rate
+        end
+    end
+
+    st.writtenRate = def.Rate
+    st.writtenMag = def.Magazine
+    return true
+end
 local patched = 0
 
 local function applyAll()
-    local mod = getGuns()
-    if not mod then return 0 end
     local n = 0
-    for _, def in pairs(mod.Types) do
-        if type(def) == "table" then
-            snapshot(def)
-
-            if S.NoSpread then
-                def.Spread = 0
-                if def.Aim then def.Aim.Spread = 0 end
-                if def.Bloom then
-                    def.Bloom.PerShot = 0
-                    def.Bloom.Max = 0
-                end
-            end
-
-            if S.NoRecoil then
-                if def.Recoil then
-                    def.Recoil.Back = 0
-                    def.Recoil.Jitter = { Up = 0, Side = 0 }
-                    if type(def.Recoil.Pattern) == "table" then
-                        for _, step in ipairs(def.Recoil.Pattern) do
-                            step[1] = 0
-                            step[2] = 0
-                        end
-                    end
-                end
-                if def.Kick then
-                    def.Kick.Up = 0
-                    def.Kick.Side = 0
-                    def.Kick.Back = 0
-                end
-            end
-
-            local magTarget = 0
-            if S.Infinite then
-                magTarget = S.InfiniteSize
-            elseif S.Magazine > 0 then
-                magTarget = S.Magazine
-            end
-
-            if magTarget > 0 and type(def.Magazine) == "number" and def.Magazine > 0 then
-                def.Magazine = magTarget
-            end
-
-            local orig = originals[keyOf(def)]
-            if orig and type(orig.Rate) == "number" then
-                if S.Rapid then
-                    -- >=1 is shots per second, <1 is seconds per shot
-                    if orig.Rate >= 1 then
-                        def.Rate = orig.Rate * S.RapidMult
-                    else
-                        def.Rate = math.max(orig.Rate / S.RapidMult, 0.05)
-                    end
-                else
-                    def.Rate = orig.Rate
-                end
-            end
-
-            n = n + 1
+    local Guns = getGuns()
+    if Guns then
+        for name, def in pairs(Guns.Types) do
+            if modDef(def, name) then n = n + 1 end
         end
     end
-    patched = n
+
+    -- the controller keeps its own copy of the def, that is what actually fires
+    local gun = gunController()
+    if gun and gun._def and gun._name then
+        modDef(gun._def, gun._name)
+    end
+
+    if n > 0 then patched = n end
     return n
 end
 
 local function restoreAll()
-    local mod = getGuns()
-    if not mod then return end
-    for _, def in pairs(mod.Types) do
-        if type(def) == "table" then
-            local orig = originals[keyOf(def)]
-            if orig then
-                def.Spread = orig.Spread
-                def.Magazine = orig.Magazine
-                def.Rate = orig.Rate
-                if orig.AimRef then orig.AimRef.Spread = orig.AimSpread end
-                if def.Bloom and orig.Bloom then
-                    def.Bloom.PerShot = orig.Bloom.PerShot
-                    def.Bloom.Max = orig.Bloom.Max
-                end
-                if def.Recoil and orig.Recoil then
-                    def.Recoil.Back = orig.Recoil.Back
-                    def.Recoil.Jitter = orig.Recoil.Jitter
-                    if type(def.Recoil.Pattern) == "table" then
-                        for i, step in ipairs(def.Recoil.Pattern) do
-                            local old = orig.Pattern[i]
-                            if old then
-                                step[1] = old[1]
-                                step[2] = old[2]
-                            end
-                        end
-                    end
-                end
-                if def.Kick and orig.Kick then
-                    def.Kick.Up = orig.Kick.Up
-                    def.Kick.Side = orig.Kick.Side
-                    def.Kick.Back = orig.Kick.Back
-                end
+    local Guns = getGuns()
+    if Guns then
+        for name, def in pairs(Guns.Types) do
+            local st = base[name]
+            if st and type(def) == "table" then
+                if type(st.rate) == "number" then def.Rate = st.rate end
+                if type(st.mag) == "number" then def.Magazine = st.mag end
             end
         end
     end
-    patched = 0
-end
-
---=========================================================
---  ABILITIES: grenades, turret, ultimate
---=========================================================
-local CombatFolder = nil
-local function combat()
-    if not CombatFolder then
-        local shared = ReplicatedStorage:FindFirstChild("Shared")
-        CombatFolder = shared and shared:FindFirstChild("Combat")
+    local gun = gunController()
+    if gun and gun._def and gun._name then
+        local st = base[gun._name]
+        if st then
+            if type(st.rate) == "number" then gun._def.Rate = st.rate end
+            if type(st.mag) == "number" then gun._def.Magazine = st.mag end
+        end
     end
-    return CombatFolder
 end
 
+--=========================================================
+--  ABILITIES
+--=========================================================
 local abilityOriginals = {}
 
 local function patchAbilities()
     local C = combat()
-    if not C then return 0 end
-    local n = 0
+    if not C then return end
 
-    -- grenades / throwables
     local okTh, Th = pcall(function() return require(C.Throwables) end)
     if okTh and type(Th) == "table" and type(Th.Types) == "table" then
         for key, def in pairs(Th.Types) do
@@ -314,22 +288,18 @@ local function patchAbilities()
                     def.Charges = saved.Charges
                     def.Recharge = saved.Recharge
                 end
-                n = n + 1
             end
         end
     end
 
-    -- turret placement cooldown
     local okTu, Tu = pcall(function() return require(C.Turrets) end)
     if okTu and type(Tu) == "table" then
         if abilityOriginals.turretRecharge == nil then
             abilityOriginals.turretRecharge = Tu.Recharge
         end
         Tu.Recharge = S.Turret and 0 or abilityOriginals.turretRecharge
-        n = n + 1
     end
 
-    -- ultimate charge rate
     local okCl, Cl = pcall(function() return require(C.Classes) end)
     if okCl and type(Cl) == "table" and type(Cl.Ultimate) == "table" then
         if abilityOriginals.ultPerSecond == nil then
@@ -337,7 +307,7 @@ local function patchAbilities()
         end
         Cl.Ultimate.PerSecond = S.Ultimate and 500 or abilityOriginals.ultPerSecond
 
-        if not abilityOriginals.ultOf then
+        if not abilityOriginals.ultOf and type(Cl.UltimateOf) == "function" then
             abilityOriginals.ultOf = Cl.UltimateOf
             Cl.UltimateOf = function(player, now)
                 if S.Ultimate then return Cl.Ultimate.Full, 0 end
@@ -345,49 +315,12 @@ local function patchAbilities()
             end
         end
     end
-
-    return n
 end
 
 local function refresh()
-    if not (S.NoSpread or S.NoRecoil or S.Magazine > 0 or S.Infinite) then
-        restoreAll()
-    else
-        applyAll()
-    end
+    local n = applyAll()
     patchAbilities()
-    return patched
-end
-
---=========================================================
---  LIVE AMMO (the game keeps the current mag outside the config)
---=========================================================
-local controllerLoader = nil
-
-local function gunController()
-    if not controllerLoader then
-        local ok, loader = pcall(function()
-            return require(LP.PlayerScripts.Client.Framework.ControllerLoader)
-        end)
-        if ok then controllerLoader = loader end
-    end
-    local map = controllerLoader and controllerLoader._map
-    return map and map.GunController or nil
-end
-
-local function topUpAmmo()
-    if not S.Infinite then return end
-    local gun = gunController()
-    if not gun or not gun._name then return end
-    local mags = gun._mags
-    local entry = mags and mags[gun._name]
-    if type(entry) ~= "table" or type(entry.Ammo) ~= "number" then return end
-
-    local target = S.InfiniteSize
-    if tonumber(entry.Ammo) ~= target then
-        entry.Ammo = target
-    end
-    entry.ReloadUntil = nil
+    return n
 end
 
 --=========================================================
@@ -398,19 +331,13 @@ local box = Tabs.Guns:AddGroupbox({ Side = "Left", Name = "Weapon", IconName = "
 box:AddToggle("NoRecoil", {
     Text = "No recoil",
     Default = true,
-    Tooltip = "Zeroes the camera kick and the spray pattern. Client side, invisible to others.",
+    Tooltip = "Zeroes the camera kick and the spray pattern. Client side.",
     Callback = function(v)
         S.NoRecoil = v
         refresh()
         notify("No recoil " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
-
-if Toggles.NoRecoil then
-    pcall(function()
-        Toggles.NoRecoil:AddKeyPicker("RecoilBind", { Text = "No recoil bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
-    end)
-end
 
 box:AddToggle("NoSpread", {
     Text = "No spread",
@@ -423,32 +350,23 @@ box:AddToggle("NoSpread", {
     end,
 })
 
-if Toggles.NoSpread then
-    pcall(function()
-        Toggles.NoSpread:AddKeyPicker("SpreadBind", { Text = "No spread bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
-    end)
-end
-
 box:AddSlider("Magazine", {
     Text = "Magazine size",
     Default = S.Magazine,
     Min = 0,
     Max = 300,
     Rounding = 0,
-    Tooltip = "0 keeps the real magazine. This is a bigger mag, not infinite ammo.",
-    Callback = function(v)
+    Tooltip = "0 keeps the real magazine. Bigger mag, not infinite ammo.",    Callback = function(v)
         S.Magazine = v
         refresh()
         saveConfig()
     end,
 })
 
-box:AddDivider("Fire rate")
-
 box:AddToggle("Rapid", {
     Text = "Faster fire",
     Default = true,
-    Tooltip = "Small multiplier on the fire rate of your weapon.",
+    Tooltip = "Speeds up shooting and the charge build on charge weapons.",
     Callback = function(v)
         S.Rapid = v
         refresh()
@@ -456,20 +374,23 @@ box:AddToggle("Rapid", {
     end,
 })
 
-if Toggles.Rapid then
-    pcall(function()
-        Toggles.Rapid:AddKeyPicker("RapidBind", { Text = "Faster fire bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
-    end)
-end
-
 box:AddSlider("RapidMult", {
     Text = "Fire rate x",
     Default = S.RapidMult,
     Min = 1.05,
     Max = 2.5,
     Rounding = 2,
-    Tooltip = "1.3 = +30% rate. Above 1.6 the server starts eating shots.",
+    Tooltip = "1.3 = +30%. Applies to both tap shots and charge speed.",
     Callback = function(v) S.RapidMult = v; refresh(); saveConfig() end,
+})
+
+box:AddButton({
+    Text = "Re-apply",
+    Icon = "rotate-ccw",
+    Func = function()
+        local n = refresh()
+        notify("Patched " .. tostring(n) .. " weapons", "check")
+    end,
 })
 
 box:AddDivider("Abilities")
@@ -478,42 +399,21 @@ box:AddToggle("Grenades", {
     Text = "Grenades: 99 charges",
     Default = false,
     Tooltip = "Charges 99 and recharge 0 on every throwable.",
-    Callback = function(v)
-        S.Grenades = v
-        refresh()
-        notify("Grenades " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
+    Callback = function(v) S.Grenades = v; refresh(); notify("Grenades " .. (v and "ON" or "OFF"), "check") end,
 })
 
 box:AddToggle("Turret", {
     Text = "Turret no cooldown",
     Default = false,
     Tooltip = "Sets the turret recharge to 0.",
-    Callback = function(v)
-        S.Turret = v
-        refresh()
-        notify("Turret cd " .. (v and "OFF" or "normal"), v and "check" or "x")
-    end,
+    Callback = function(v) S.Turret = v; refresh(); notify("Turret cd " .. (v and "off" or "normal"), "check") end,
 })
 
 box:AddToggle("Ultimate", {
     Text = "Ultimate always full",
     Default = false,
     Tooltip = "Forces the ultimate charge to Full on the client.",
-    Callback = function(v)
-        S.Ultimate = v
-        refresh()
-        notify("Ultimate " .. (v and "full" or "normal"), v and "check" or "x")
-    end,
-})
-
-box:AddButton({
-    Text = "Re-apply",
-    Icon = "rotate-ccw",
-    Func = function()
-        local n = refresh()
-        notify("Patched " .. tostring(n) .. " weapon types", "check")
-    end,
+    Callback = function(v) S.Ultimate = v; refresh(); notify("Ultimate " .. (v and "full" or "normal"), "check") end,
 })
 
 box:AddDivider("Status")
@@ -523,24 +423,17 @@ local status = box:AddLabel("patched 0")
 task.spawn(function()
     task.wait(2)
     while getgenv().__rat4080Hive do
-        task.wait(1.5)
         pcall(function()
-            -- keep re-applying: new weapon types can show up mid session
-            if S.NoRecoil or S.NoSpread or S.Infinite or S.Magazine > 0 then
-                refresh()
-            end
-            local mag = S.Magazine > 0 and S.Magazine or nil
-            status:SetText(string.format("patched %d types  ·  recoil %s  ·  spread %s  ·  mag %s  ·  rate x%.2f",
+            refresh()
+            status:SetText(string.format("weapons %d  ·  mag %s  ·  rate x%.2f  ·  grenade %s",
                 patched,
-                S.NoRecoil and "off" or "on",
-                S.NoSpread and "off" or "on",
-                mag and tostring(mag) or "real",
-                S.Rapid and S.RapidMult or 1))
+                S.Magazine > 0 and tostring(S.Magazine) or "real",
+                S.Rapid and S.RapidMult or 1,
+                S.Grenades and "99" or "normal"))
         end)
+        task.wait(0.5)
     end
 end)
-
--- ammo stays finite on purpose: no top-up loop here.
 
 local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
 
@@ -565,19 +458,16 @@ do
     end
 end
 
--- Obsidian can fire toggle callbacks with false while building the window.
--- Force the real defaults here, then patch.
+-- Obsidian fires toggle callbacks with false while building the window
 S.NoRecoil = true
 S.NoSpread = true
 S.Rapid = true
-S.Infinite = false
 pcall(function() Toggles.NoRecoil:SetValue(true) end)
 pcall(function() Toggles.NoSpread:SetValue(true) end)
 pcall(function() Toggles.Rapid:SetValue(true) end)
 S.NoRecoil = true
 S.NoSpread = true
 S.Rapid = true
-S.Infinite = false
 
 refresh()
 
@@ -588,7 +478,6 @@ getgenv().__rat4080Hive = {
     Apply = refresh,
     Restore = restoreAll,
     Count = function() return patched end,
-    TopUpAmmo = topUpAmmo,
 }
 
 Library:OnUnload(function()
@@ -597,6 +486,6 @@ Library:OnUnload(function()
     getgenv().__rat4080Hive = nil
 end)
 
-notify(string.format("Hive guns ready · %d types · %s", patched, CFG.MenuKey), "check")
+notify(string.format("Hive guns ready · %d weapons · %s", patched, CFG.MenuKey), "check")
 
 return { Library = Library, Window = Window, State = S }
