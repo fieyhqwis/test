@@ -25,9 +25,12 @@ local S = {
     NoSpread = true,
     Infinite = false,  -- off: ammo stays finite, magazine size is what changes
     InfiniteSize = 9999,
-    Magazine = 60,     -- custom magazine size
+    Magazine = 100,
     Rapid = true,
     RapidMult = 1.3,
+    Grenades = false,
+    Turret = false,
+    Ultimate = false,
 }
 
 local Library, Window, Toggles, Options
@@ -217,7 +220,16 @@ local function applyAll()
 
             local orig = originals[keyOf(def)]
             if orig and type(orig.Rate) == "number" then
-                def.Rate = S.Rapid and (orig.Rate * S.RapidMult) or orig.Rate
+                if S.Rapid then
+                    -- >=1 is shots per second, <1 is seconds per shot
+                    if orig.Rate >= 1 then
+                        def.Rate = orig.Rate * S.RapidMult
+                    else
+                        def.Rate = math.max(orig.Rate / S.RapidMult, 0.05)
+                    end
+                else
+                    def.Rate = orig.Rate
+                end
             end
 
             n = n + 1
@@ -266,12 +278,85 @@ local function restoreAll()
     patched = 0
 end
 
+--=========================================================
+--  ABILITIES: grenades, turret, ultimate
+--=========================================================
+local CombatFolder = nil
+local function combat()
+    if not CombatFolder then
+        local shared = ReplicatedStorage:FindFirstChild("Shared")
+        CombatFolder = shared and shared:FindFirstChild("Combat")
+    end
+    return CombatFolder
+end
+
+local abilityOriginals = {}
+
+local function patchAbilities()
+    local C = combat()
+    if not C then return 0 end
+    local n = 0
+
+    -- grenades / throwables
+    local okTh, Th = pcall(function() return require(C.Throwables) end)
+    if okTh and type(Th) == "table" and type(Th.Types) == "table" then
+        for key, def in pairs(Th.Types) do
+            if type(def) == "table" then
+                local saved = abilityOriginals["TH_" .. tostring(key)]
+                if not saved then
+                    saved = { Charges = def.Charges, Recharge = def.Recharge }
+                    abilityOriginals["TH_" .. tostring(key)] = saved
+                end
+                if S.Grenades then
+                    if type(def.Charges) == "number" then def.Charges = 99 end
+                    if type(def.Recharge) == "number" then def.Recharge = 0 end
+                else
+                    def.Charges = saved.Charges
+                    def.Recharge = saved.Recharge
+                end
+                n = n + 1
+            end
+        end
+    end
+
+    -- turret placement cooldown
+    local okTu, Tu = pcall(function() return require(C.Turrets) end)
+    if okTu and type(Tu) == "table" then
+        if abilityOriginals.turretRecharge == nil then
+            abilityOriginals.turretRecharge = Tu.Recharge
+        end
+        Tu.Recharge = S.Turret and 0 or abilityOriginals.turretRecharge
+        n = n + 1
+    end
+
+    -- ultimate charge rate
+    local okCl, Cl = pcall(function() return require(C.Classes) end)
+    if okCl and type(Cl) == "table" and type(Cl.Ultimate) == "table" then
+        if abilityOriginals.ultPerSecond == nil then
+            abilityOriginals.ultPerSecond = Cl.Ultimate.PerSecond
+        end
+        Cl.Ultimate.PerSecond = S.Ultimate and 500 or abilityOriginals.ultPerSecond
+
+        if not abilityOriginals.ultOf then
+            abilityOriginals.ultOf = Cl.UltimateOf
+            Cl.UltimateOf = function(player, now)
+                if S.Ultimate then return Cl.Ultimate.Full, 0 end
+                return abilityOriginals.ultOf(player, now)
+            end
+        end
+    end
+
+    return n
+end
+
 local function refresh()
     if not (S.NoSpread or S.NoRecoil or S.Magazine > 0 or S.Infinite) then
         restoreAll()
-        return 0
+    else
+        applyAll()
     end
-    return applyAll()
+    patchAbilities()
+    return patched
 end
 
 --=========================================================
@@ -385,6 +470,41 @@ box:AddSlider("RapidMult", {
     Rounding = 2,
     Tooltip = "1.3 = +30% rate. Above 1.6 the server starts eating shots.",
     Callback = function(v) S.RapidMult = v; refresh(); saveConfig() end,
+})
+
+box:AddDivider("Abilities")
+
+box:AddToggle("Grenades", {
+    Text = "Grenades: 99 charges",
+    Default = false,
+    Tooltip = "Charges 99 and recharge 0 on every throwable.",
+    Callback = function(v)
+        S.Grenades = v
+        refresh()
+        notify("Grenades " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+box:AddToggle("Turret", {
+    Text = "Turret no cooldown",
+    Default = false,
+    Tooltip = "Sets the turret recharge to 0.",
+    Callback = function(v)
+        S.Turret = v
+        refresh()
+        notify("Turret cd " .. (v and "OFF" or "normal"), v and "check" or "x")
+    end,
+})
+
+box:AddToggle("Ultimate", {
+    Text = "Ultimate always full",
+    Default = false,
+    Tooltip = "Forces the ultimate charge to Full on the client.",
+    Callback = function(v)
+        S.Ultimate = v
+        refresh()
+        notify("Ultimate " .. (v and "full" or "normal"), v and "check" or "x")
+    end,
 })
 
 box:AddButton({
