@@ -6,6 +6,7 @@
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local LP = Players.LocalPlayer
 
@@ -139,14 +140,18 @@ local function getGuns()
 end
 
 local loaderModule = nil
-local function gunController()
+local function controllerLoader()
     if not loaderModule then
         local ok, loader = pcall(function()
             return require(LP.PlayerScripts.Client.Framework.ControllerLoader)
         end)
         if ok then loaderModule = loader end
     end
-    local map = loaderModule and loaderModule._map
+    return loaderModule
+end
+
+local function gunController()
+    local map = controllerLoader() and loaderModule._map
     return map and map.GunController or nil
 end
 
@@ -287,6 +292,83 @@ local function refresh()
 end
 
 --=========================================================
+--  WEAK SPOT AIM
+--=========================================================
+local aimOriginals = {}
+
+local function bugController()
+    local loader = controllerLoader()
+    local map = loader and loader._map
+    return map and map.BugController or nil
+end
+
+local function partWeakSpot(model)
+    if not model or typeof(model) ~= "Instance" then return nil end
+    for _, name in ipairs({ "Head", "Weak", "WeakPoint", "Core", "Eye", "Glow" }) do
+        local p = model:FindFirstChild(name, true)
+        if p and p:IsA("BasePart") then return p end
+    end
+    local best, bestY = nil, -math.huge
+    for _, d in ipairs(model:GetDescendants()) do
+        if d:IsA("BasePart") and d.Position.Y > bestY then
+            best, bestY = d, d.Position.Y
+        end
+    end
+    return best
+end
+
+local function bugModels()
+    local list = {}
+    local ctrl = bugController()
+    local bugs = ctrl and ctrl._bugs
+    if type(bugs) == "table" then
+        for _, entry in pairs(bugs) do
+            if type(entry) == "table" then
+                local cand = entry.Rig or entry.Model or entry.Part or entry.Root or entry.Body
+                if typeof(cand) == "Instance" then list[#list + 1] = cand end
+            elseif typeof(entry) == "Instance" then
+                list[#list + 1] = entry
+            end
+        end
+    end
+    return list
+end
+
+local aimEnabled = false
+
+connect(RunService.RenderStepped, function()
+    if not aimEnabled then return end
+    local cam = workspace.CurrentCamera
+    local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+    if not cam or not hum then return end
+
+    local models = bugModels()
+    if #models == 0 then return end
+
+    local camPos = cam.CFrame.Position
+    local bestPart, bestScore = nil, math.huge
+
+    for _, model in ipairs(models) do
+        local part = partWeakSpot(model)
+        if part then
+            local sp, on = cam:WorldToViewportPoint(part.Position)
+            if on and sp.Z > 0 then
+                local screenDist = (Vector2.new(sp.X, sp.Y) - cam.ViewportSize * 0.5).Magnitude
+                local worldDist = (part.Position - camPos).Magnitude
+                local score = screenDist + worldDist * 0.15
+                if screenDist < 520 and score < bestScore then
+                    bestScore, bestPart = score, part
+                end
+            end
+        end
+    end
+
+    if bestPart then
+        cam.CFrame = CFrame.lookAt(camPos, bestPart.Position)
+    end
+end)
+
+--=========================================================
 --  UI
 --=========================================================
 local box = Tabs.Guns:AddGroupbox({ Side = "Left", Name = "Weapon", IconName = "crosshair" })
@@ -355,6 +437,24 @@ box:AddButton({
         notify("Patched " .. tostring(n) .. " weapons", "check")
     end,
 })
+
+box:AddDivider("Aim")
+
+box:AddToggle("WeakAim", {
+    Text = "Aim at weak spot",
+    Default = false,
+    Tooltip = "Keeps the crosshair on the head/weak part of the nearest bug, so body shots land on the weak spot.",
+    Callback = function(v)
+        aimEnabled = v
+        notify("Weak spot aim " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.WeakAim then
+    pcall(function()
+        Toggles.WeakAim:AddKeyPicker("WeakBind", { Text = "Weak spot bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 box:AddDivider("Abilities")
 
