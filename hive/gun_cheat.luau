@@ -27,6 +27,7 @@ local S = {
     Magazine = 0,       -- 0 = leave the real magazine alone
     Rapid = true,
     RapidMult = 1.3,
+    WeakAim = false,
     AimStrength = 0.35,
     Grenades = false,
     Turret = false,
@@ -286,9 +287,50 @@ local function patchAbilities()
     end
 end
 
+local aimAssistOriginals = nil
+
+local function patchAimAssist()
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local cfgFolder = shared and shared:FindFirstChild("Config")
+    local mod = cfgFolder and cfgFolder:FindFirstChild("AimAssist")
+    if not mod then return end
+    local ok, cfg = pcall(function() return require(mod) end)
+    if not ok or type(cfg) ~= "table" then return end
+
+    if not aimAssistOriginals then
+        aimAssistOriginals = {
+            Range = cfg.Range,
+            Cone = cfg.Cone and { Aim = cfg.Cone.Aim, Hip = cfg.Cone.Hip },
+            Pull = cfg.Pull and { Aim = cfg.Pull.Aim, Hip = cfg.Pull.Hip },
+            Follow = cfg.Follow and { Hip = cfg.Follow.Hip, Aim = cfg.Follow.Aim },
+            Firing = cfg.Firing and { Aim = cfg.Firing.Aim, Hip = cfg.Firing.Hip },
+            Slowdown = cfg.Slowdown and { Aim = cfg.Slowdown.Aim, Hip = cfg.Slowdown.Hip },
+        }
+    end
+
+    local o = aimAssistOriginals
+    if not S.WeakAim then
+        cfg.Range = o.Range
+        if cfg.Cone and o.Cone then cfg.Cone.Aim, cfg.Cone.Hip = o.Cone.Aim, o.Cone.Hip end
+        if cfg.Pull and o.Pull then cfg.Pull.Aim, cfg.Pull.Hip = o.Pull.Aim, o.Pull.Hip end
+        if cfg.Follow and o.Follow then cfg.Follow.Aim, cfg.Follow.Hip = o.Follow.Aim, o.Follow.Hip end
+        if cfg.Firing and o.Firing then cfg.Firing.Aim, cfg.Firing.Hip = o.Firing.Aim, o.Firing.Hip end
+        if cfg.Slowdown and o.Slowdown then cfg.Slowdown.Aim, cfg.Slowdown.Hip = o.Slowdown.Aim, o.Slowdown.Hip end
+        return
+    end
+
+    cfg.Range = 400
+    if cfg.Cone then cfg.Cone.Aim, cfg.Cone.Hip = 45, 45 end
+    if cfg.Pull then cfg.Pull.Aim, cfg.Pull.Hip = 1, 1 end
+    if cfg.Follow then cfg.Follow.Aim, cfg.Follow.Hip = 1, 1 end
+    if cfg.Firing then cfg.Firing.Aim, cfg.Firing.Hip = 80, 80 end
+    if cfg.Slowdown then cfg.Slowdown.Aim, cfg.Slowdown.Hip = 0, 0 end
+end
+
 local function refresh()
     local n = applyAll()
     patchAbilities()
+    patchAimAssist()
     return n
 end
 
@@ -458,7 +500,9 @@ box:AddToggle("WeakAim", {
     Default = false,
     Tooltip = "Smoothly pulls the crosshair onto the weak part (head / core) of the nearest target on screen.",
     Callback = function(v)
+        S.WeakAim = v
         aimEnabled = v
+        refresh()
         notify("Weak spot aim " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
