@@ -31,6 +31,7 @@ local S = {
     AimStrength = 0.35,
     Silent = false,
     Fov = 280,
+    HeadOffset = 0,
     HeadAll = false,
     Grenades = false,
     Turret = false,
@@ -370,7 +371,7 @@ local function bugWeakPoint(entry)
     local pos = entry.Pos
     if typeof(pos) == "Vector3" then
         local h = tonumber(rig and rig._b) or 2.6
-        return pos + Vector3.new(0, h, 0)
+        return pos + Vector3.new(0, h + (S.HeadOffset or 0), 0)
     end
     return nil
 end
@@ -684,6 +685,17 @@ box:AddSlider("AimStrength", {
     Callback = function(v) S.AimStrength = v end,
 })
 
+box:AddSlider("HeadOffset", {
+    Text = "Head offset",
+    Default = S.HeadOffset,
+    Min = -1.5,
+    Max = 2.5,
+    Rounding = 1,
+    Suffix = " studs",
+    Tooltip = "Подними точку прицела, если берёт шею вместо головы.",
+    Callback = function(v) S.HeadOffset = v end,
+})
+
 if Toggles.WeakAim then
     pcall(function()
         Toggles.WeakAim:AddKeyPicker("WeakBind", {
@@ -697,29 +709,6 @@ if Toggles.WeakAim then
 end
 
 aimKeyOption = Options.WeakBind
-
-box:AddDivider("Silent aim")
-
-box:AddToggle("Silent", {
-    Text = "Silent aim (FOV)",
-    Default = false,
-    Tooltip = "Adds hits for bugs inside the circle into your real shot packet. Camera never moves.",
-    Callback = function(v)
-        S.Silent = v
-        if v then installSilent() else uninstallSilent() end
-        notify("Silent aim " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
-box:AddSlider("Fov", {
-    Text = "FOV radius",
-    Default = S.Fov,
-    Min = 60,
-    Max = 700,
-    Rounding = 0,
-    Suffix = " px",
-    Callback = function(v) S.Fov = v end,
-})
 
 box:AddDivider("Abilities")
 
