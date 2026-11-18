@@ -29,6 +29,8 @@ local S = {
     RapidMult = 1.3,
     WeakAim = false,
     AimStrength = 0.35,
+    Silent = false,
+    Fov = 280,
     HeadAll = false,
     Grenades = false,
     Turret = false,
@@ -487,6 +489,69 @@ local function uninstallHeadHook()
     sendHitsOriginal = nil
 end
 
+--=========================================================
+--  SILENT AIM (injects the real hit batch, no camera movement)
+--=========================================================
+local silentInstalled = false
+local silentBase = nil
+
+local function silentTargets()
+    local cam = workspace.CurrentCamera
+    if not cam then return {} end
+    local list = {}
+    local ctrl = bugController()
+    local bugs = ctrl and ctrl._bugs
+    if type(bugs) ~= "table" then return list end
+
+    local center = cam.ViewportSize * 0.5
+    for _, entry in ipairs(bugs) do
+        if type(entry) == "table" and entry.Id then
+            local point = bugWeakPoint(entry)
+            if point then
+                local sp, on = cam:WorldToViewportPoint(point)
+                if on and sp.Z > 0 then
+                    local px = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                    local dist = (point - cam.CFrame.Position).Magnitude
+                    if px <= S.Fov and dist < 400 and wallClear(point) then
+                        list[#list + 1] = { id = entry.Id, dist = dist, px = px }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.px < b.px end)
+    return list
+end
+
+local function installSilent()
+    local gun = gunController()
+    if not gun or silentInstalled or type(gun._sendHits) ~= "function" then return false end
+    silentBase = gun._sendHits
+    gun._sendHits = function(self, t)
+        if S.Silent then
+            local hits = self._hits
+            if type(hits) == "table" then
+                local targets = silentTargets()
+                for i = 1, math.min(#targets, 3) do
+                    hits[#hits + 1] = { targets[i].id, false, 0, 0, false }
+                end
+            end
+        end
+        return silentBase(self, t)
+    end
+    silentInstalled = true
+    return true
+end
+
+local function uninstallSilent()
+    local gun = gunController()
+    if silentInstalled and gun and silentBase then
+        gun._sendHits = silentBase
+    end
+    silentInstalled = false
+    silentBase = nil
+end
+
 RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 2, function()    if not aimEnabled or not aimHeld() then return end
     local cam = workspace.CurrentCamera
     if not cam then return end
@@ -633,6 +698,29 @@ end
 
 aimKeyOption = Options.WeakBind
 
+box:AddDivider("Silent aim")
+
+box:AddToggle("Silent", {
+    Text = "Silent aim (FOV)",
+    Default = false,
+    Tooltip = "Adds hits for bugs inside the circle into your real shot packet. Camera never moves.",
+    Callback = function(v)
+        S.Silent = v
+        if v then installSilent() else uninstallSilent() end
+        notify("Silent aim " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+box:AddSlider("Fov", {
+    Text = "FOV radius",
+    Default = S.Fov,
+    Min = 60,
+    Max = 700,
+    Rounding = 0,
+    Suffix = " px",
+    Callback = function(v) S.Fov = v end,
+})
+
 box:AddDivider("Abilities")
 
 box:AddToggle("Turret", {
@@ -665,6 +753,36 @@ task.spawn(function()
     task.wait(2)
     while getgenv().__rat4080Hive do
         task.wait(1)
+    end
+end)
+
+local fovCircle = nil
+
+task.spawn(function()
+    task.wait(2)
+    while getgenv().__rat4080Hive do
+        task.wait(0.05)
+        if S.Silent then
+            if not fovCircle then
+                local ok, circle = pcall(function() return Drawing.new("Circle") end)
+                if ok and circle then
+                    fovCircle = circle
+                    circle.Thickness = 1
+                    circle.Color = Color3.fromRGB(120, 255, 160)
+                    circle.Filled = false
+                    circle.NumSides = 64
+                    circle.Transparency = 1
+                end
+            end
+            local cam = workspace.CurrentCamera
+            if fovCircle and cam then
+                fovCircle.Position = cam.ViewportSize * 0.5
+                fovCircle.Radius = S.Fov
+                fovCircle.Visible = true
+            end
+        elseif fovCircle then
+            fovCircle.Visible = false
+        end
     end
 end)
 
@@ -716,6 +834,8 @@ getgenv().__rat4080Hive = {
 Library:OnUnload(function()
     restoreAll()
     uninstallHeadHook()
+    uninstallSilent()
+    if fovCircle then pcall(function() fovCircle:Remove() end) end
     pcall(function() RunService:UnbindFromRenderStep("RAT4080WeakAim") end)
     for _, c in ipairs(Signals) do pcall(function() c:Disconnect() end) end
     getgenv().__rat4080Hive = nil
