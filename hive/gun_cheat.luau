@@ -330,7 +330,6 @@ end
 local function refresh()
     local n = applyAll()
     patchAbilities()
-    patchAimAssist()
     return n
 end
 
@@ -345,78 +344,118 @@ local function bugController()
     return map and map.BugController or nil
 end
 
-local function partWeakSpot(model)
-    if not model or typeof(model) ~= "Instance" then return nil end
-    for _, name in ipairs({ "Head", "Weak", "WeakPoint", "Core", "Eye", "Yolk", "Glow" }) do
-        local p = model:FindFirstChild(name, true)
-        if p and p:IsA("BasePart") then return p end
-    end
-    return nil
-end
+local function bugWeakPoint(entry)
+    if type(entry) ~= "table" then return nil end
+    local rig = entry.Rig
+    local bestY, bestX, bestZ = nil, nil, nil
 
-local function bugModels()
-    local list = {}
-    local ctrl = bugController()
-
-    local bugs = ctrl and ctrl._bugs
-    if type(bugs) == "table" then
-        for _, entry in pairs(bugs) do
-            if type(entry) == "table" then
-                local cand = entry.Rig or entry.Model or entry.Part or entry.Root or entry.Body
-                if typeof(cand) == "Instance" then list[#list + 1] = cand end
-            elseif typeof(entry) == "Instance" then
-                list[#list + 1] = entry
+    if type(rig) == "table" and type(rig.CFrames) == "table" then
+        local cf = rig.CFrames
+        -- flat layout: 12 numbers per CFrame, first three are the position
+        for i = 1, #cf - 11, 12 do
+            local px, py, pz = cf[i], cf[i + 1], cf[i + 2]
+            if type(py) == "number" and (not bestY or py > bestY) then
+                bestY, bestX, bestZ = py, px, pz
             end
         end
     end
 
-    -- nests are the weak core targets when no swarm is up
+    if bestY and bestX and bestZ then
+        return Vector3.new(bestX, bestY + 0.35, bestZ)
+    end
+
+    local pos = entry.Pos
+    if typeof(pos) == "Vector3" then
+        local h = tonumber(rig and rig._b) or 2.6
+        return pos + Vector3.new(0, h, 0)
+    end
+    return nil
+end
+
+local function bugTargets()
+    local list = {}
+    local ctrl = bugController()
+    local bugs = ctrl and ctrl._bugs
+    if type(bugs) == "table" then
+        for _, entry in pairs(bugs) do
+            local point = bugWeakPoint(entry)
+            if point then list[#list + 1] = { pos = point, health = tonumber(entry.Health) } end
+        end
+    end
+    return list
+end
+
+local function nestTargets()
+    local list = {}
     local nests = workspace:FindFirstChild("Nests")
     if nests then
         for _, nest in ipairs(nests:GetChildren()) do
-            list[#list + 1] = nest
+            local core = nest:FindFirstChild("Core", true)
+            if core and core:IsA("BasePart") then
+                list[#list + 1] = { pos = core.Position }
+            end
         end
     end
-
     return list
 end
 
 local aimEnabled = false
+local aimKeyOption = nil
+
+local function aimHeld()
+    if not aimKeyOption then return false end
+    local ok, state = pcall(function() return aimKeyOption:GetState() end)
+    return ok and state == true
+end
+
+local function wallClear(targetPos)
+    local cam = workspace.CurrentCamera
+    if not cam then return false end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local ignore = { LP.Character }
+    local nests = workspace:FindFirstChild("Nests")
+    if nests then ignore[#ignore + 1] = nests end
+    params.FilterDescendantsInstances = ignore
+    params.IgnoreWater = true
+    local dir = targetPos - cam.CFrame.Position
+    local hit = workspace:Raycast(cam.CFrame.Position, dir, params)
+    if not hit then return true end
+    return (hit.Position - targetPos).Magnitude < 3
+end
 
 RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 8, function()
-    if not aimEnabled then return end
+    if not aimEnabled or not aimHeld() then return end
     local cam = workspace.CurrentCamera
     if not cam then return end
 
-    local models = bugModels()
-    if #models == 0 then return end
+    local targets = bugTargets()
+    if #targets == 0 then targets = nestTargets() end
+    if #targets == 0 then return end
 
     local camPos = cam.CFrame.Position
     local viewport = cam.ViewportSize
     local center = viewport * 0.5
-    local bestPart, bestScore = nil, math.huge
+    local bestPos, bestScore = nil, math.huge
 
-    for _, model in ipairs(models) do
-        local part = partWeakSpot(model)
-        if part then
-            local sp, on = cam:WorldToViewportPoint(part.Position)
-            if on and sp.Z > 0 then
-                local screenDist = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                local worldDist = (part.Position - camPos).Magnitude
-                if screenDist < 180 and worldDist < 400 then
-                    local score = screenDist + worldDist * 0.1
-                    if score < bestScore then
-                        bestScore, bestPart = score, part
-                    end
+    for _, t in ipairs(targets) do
+        local sp, on = cam:WorldToViewportPoint(t.pos)
+        if on and sp.Z > 0 then
+            local screenDist = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+            local worldDist = (t.pos - camPos).Magnitude
+            if screenDist < 320 and worldDist < 400 and wallClear(t.pos) then
+                local score = screenDist + worldDist * 0.1
+                if score < bestScore then
+                    bestScore, bestPos = score, t.pos
                 end
             end
         end
     end
 
-    if not bestPart then return end
+    if not bestPos then return end
 
     local current = cam.CFrame.LookVector
-    local want = (bestPart.Position - camPos).Unit
+    local want = (bestPos - camPos).Unit
     local alpha = math.clamp(S.AimStrength, 0.05, 1)
     local blended = current:Lerp(want, alpha)
     if blended.Magnitude < 0.01 then return end
@@ -519,9 +558,17 @@ box:AddSlider("AimStrength", {
 
 if Toggles.WeakAim then
     pcall(function()
-        Toggles.WeakAim:AddKeyPicker("WeakBind", { Text = "Weak spot bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+        Toggles.WeakAim:AddKeyPicker("WeakBind", {
+            Text = "Aim bind (hold)",
+            Default = "None",
+            Mode = "Hold",
+            SyncToggleState = false,
+            NoUI = false,
+        })
     end)
 end
+
+aimKeyOption = Options.WeakBind
 
 box:AddDivider("Abilities")
 
