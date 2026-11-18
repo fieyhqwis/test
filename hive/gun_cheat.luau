@@ -23,7 +23,9 @@ local CFG = {
 local S = {
     NoRecoil = true,
     NoSpread = true,
-    Magazine = 0,   -- 0 = leave the magazine alone
+    Infinite = true,   -- forces every magazine to InfiniteSize
+    InfiniteSize = 9999,
+    Magazine = 0,      -- extra slider, applies on top when Infinite is off
 }
 
 local Library, Window, Toggles, Options
@@ -199,8 +201,15 @@ local function applyAll()
                 end
             end
 
-            if S.Magazine > 0 and type(def.Magazine) == "number" and def.Magazine > 0 then
-                def.Magazine = S.Magazine
+            local magTarget = 0
+            if S.Infinite then
+                magTarget = S.InfiniteSize
+            elseif S.Magazine > 0 then
+                magTarget = S.Magazine
+            end
+
+            if magTarget > 0 and type(def.Magazine) == "number" and def.Magazine > 0 then
+                def.Magazine = magTarget
             end
 
             n = n + 1
@@ -249,7 +258,7 @@ local function restoreAll()
 end
 
 local function refresh()
-    if not (S.NoSpread or S.NoRecoil or S.Magazine > 0) then
+    if not (S.NoSpread or S.NoRecoil or S.Magazine > 0 or S.Infinite) then
         restoreAll()
         return 0
     end
@@ -295,6 +304,32 @@ if Toggles.NoSpread then
     end)
 end
 
+box:AddToggle("Infinite", {
+    Text = "Infinite ammo",
+    Default = true,
+    Tooltip = "Rewrites every magazine to a huge size. Works on weapons added after the script loaded too.",
+    Callback = function(v)
+        S.Infinite = v
+        refresh()
+        notify("Infinite ammo " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.Infinite then
+    pcall(function()
+        Toggles.Infinite:AddKeyPicker("AmmoBind", { Text = "Infinite ammo bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
+box:AddSlider("InfiniteSize", {
+    Text = "Infinite mag size",
+    Default = S.InfiniteSize,
+    Min = 100,
+    Max = 9999,
+    Rounding = 0,
+    Callback = function(v) S.InfiniteSize = v; refresh() end,
+})
+
 box:AddSlider("Magazine", {
     Text = "Magazine size",
     Default = S.Magazine,
@@ -324,16 +359,18 @@ local status = box:AddLabel("patched 0")
 
 task.spawn(function()
     while getgenv().__rat4080Hive do
-        task.wait(1)
+        task.wait(1.5)
         pcall(function()
-            if patched == 0 and (S.NoRecoil or S.NoSpread or S.Magazine > 0) then
+            -- keep re-applying: new weapon types can show up mid session
+            if S.NoRecoil or S.NoSpread or S.Infinite or S.Magazine > 0 then
                 refresh()
             end
+            local mag = S.Infinite and S.InfiniteSize or (S.Magazine > 0 and S.Magazine or nil)
             status:SetText(string.format("patched %d types  ·  recoil %s  ·  spread %s  ·  mag %s",
                 patched,
                 S.NoRecoil and "off" or "on",
                 S.NoSpread and "off" or "on",
-                S.Magazine > 0 and tostring(S.Magazine) or "real"))
+                mag and tostring(mag) or "real"))
         end)
     end
 end)
@@ -359,10 +396,13 @@ end
 -- Force the real defaults here, then patch.
 S.NoRecoil = true
 S.NoSpread = true
+S.Infinite = true
 pcall(function() Toggles.NoRecoil:SetValue(true) end)
 pcall(function() Toggles.NoSpread:SetValue(true) end)
+pcall(function() Toggles.Infinite:SetValue(true) end)
 S.NoRecoil = true
 S.NoSpread = true
+S.Infinite = true
 
 refresh()
 
