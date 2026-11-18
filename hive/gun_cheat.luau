@@ -266,6 +266,37 @@ local function refresh()
 end
 
 --=========================================================
+--  LIVE AMMO (the game keeps the current mag outside the config)
+--=========================================================
+local controllerLoader = nil
+
+local function gunController()
+    if not controllerLoader then
+        local ok, loader = pcall(function()
+            return require(LP.PlayerScripts.Client.Framework.ControllerLoader)
+        end)
+        if ok then controllerLoader = loader end
+    end
+    local map = controllerLoader and controllerLoader._map
+    return map and map.GunController or nil
+end
+
+local function topUpAmmo()
+    if not S.Infinite then return end
+    local gun = gunController()
+    if not gun or not gun._name then return end
+    local mags = gun._mags
+    local entry = mags and mags[gun._name]
+    if type(entry) ~= "table" or type(entry.Ammo) ~= "number" then return end
+
+    local target = S.InfiniteSize
+    if tonumber(entry.Ammo) ~= target then
+        entry.Ammo = target
+    end
+    entry.ReloadUntil = nil
+end
+
+--=========================================================
 --  UI
 --=========================================================
 local box = Tabs.Guns:AddGroupbox({ Side = "Left", Name = "Weapon", IconName = "crosshair" })
@@ -358,6 +389,7 @@ box:AddDivider("Status")
 local status = box:AddLabel("patched 0")
 
 task.spawn(function()
+    task.wait(2)
     while getgenv().__rat4080Hive do
         task.wait(1.5)
         pcall(function()
@@ -372,6 +404,15 @@ task.spawn(function()
                 S.NoSpread and "off" or "on",
                 mag and tostring(mag) or "real"))
         end)
+    end
+end)
+
+-- ammo lives in the gun controller, not in the config, so top it up often
+task.spawn(function()
+    task.wait(1)
+    while getgenv().__rat4080Hive do
+        pcall(topUpAmmo)
+        task.wait(0.2)
     end
 end)
 
@@ -413,6 +454,7 @@ getgenv().__rat4080Hive = {
     Apply = refresh,
     Restore = restoreAll,
     Count = function() return patched end,
+    TopUpAmmo = topUpAmmo,
 }
 
 Library:OnUnload(function()
