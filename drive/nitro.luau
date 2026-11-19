@@ -19,6 +19,7 @@ local CFG = {
 local S = {
     Nitro = true,
     Power = 1.3,
+    Cursor = true,
 }
 
 local Library, Window, Toggles, Options
@@ -211,9 +212,26 @@ box:AddDivider("Status")
 
 local status = box:AddLabel("waiting for car")
 
+local uis = game:GetService("UserInputService")
+
+task.spawn(function()
+    task.wait(0.5)
+    while getgenv().__rat4080Drive do
+        pcall(function()
+            if S.Cursor and Window.MainFrame.Visible then
+                if uis.MouseIconEnabled ~= true then
+                    uis.MouseIconEnabled = true
+                end
+            end
+        end)
+        task.wait(0.25)
+    end
+end)
+
 local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
 
 menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = CFG.MenuKey, NoUI = true, Text = "Menu keybind" })
+menu:AddToggle("Cursor", { Text = "Force cursor while menu open", Default = true, Callback = function(v) S.Cursor = v end })
 menu:AddToggle("CustomCursor", { Text = "Fallback cursor", Default = true, Callback = function() end })
 menu:AddButton({ Text = "Close menu", Icon = "x", Func = function() pcall(function() Window:Toggle(false) end) end })
 menu:AddButton({ Text = "Unload", Icon = "power", Func = function() pcall(function() Library:Unload() end) end })
@@ -243,8 +261,11 @@ task.spawn(function()
 end)
 
 S.Nitro = true
+S.Cursor = true
 pcall(function() Toggles.Nitro:SetValue(true) end)
+pcall(function() Toggles.Cursor:SetValue(true) end)
 S.Nitro = true
+S.Cursor = true
 
 getgenv().__rat4080Drive = {
     State = S,
