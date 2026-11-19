@@ -26,6 +26,7 @@ local S = {
     Speed = 60,
     Hover = true,
     Cursor = true,
+    NoAbilityCd = false,
 }
 
 local Library, Window, Toggles, Options
@@ -173,6 +174,41 @@ connect(RunService.Heartbeat, function()
 end)
 
 --=========================================================
+--  ABILITIES (cooldown)
+--=========================================================
+local abilityBase = nil
+
+local function abilityList()
+    local rs = game:GetService("ReplicatedStorage")
+    local folder = rs:FindFirstChild("SwordCombat")
+    local mod = folder and folder:FindFirstChild("Abilities")
+    if not mod then return nil end
+    local ok, A = pcall(function() return require(mod) end)
+    if ok and type(A) == "table" and type(A.List) == "table" then return A.List end
+    return nil
+end
+
+local function applyAbilities()
+    local list = abilityList()
+    if not list then return end
+
+    if not abilityBase then
+        abilityBase = {}
+        for i, entry in pairs(list) do
+            if type(entry) == "table" and type(entry.cooldown) == "number" then
+                abilityBase[i] = entry.cooldown
+            end
+        end
+    end
+
+    for i, entry in pairs(list) do
+        if type(entry) == "table" and type(abilityBase[i]) == "number" then
+            entry.cooldown = S.NoAbilityCd and 0 or abilityBase[i]
+        end
+    end
+end
+
+--=========================================================
 --  UI
 --=========================================================
 local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Fly", IconName = "plane" })
@@ -209,6 +245,25 @@ box:AddToggle("Hover", {
     Tooltip = "When no keys are held the character hangs still instead of falling.",
     Callback = function(v) S.Hover = v end,
 })
+
+box:AddDivider("Abilities")
+
+box:AddToggle("NoAbilityCd", {
+    Text = "Abilities no cooldown",
+    Default = false,
+    Tooltip = "Zeroes the client cooldown of every ability (bandage, sand, hook...).",
+    Callback = function(v)
+        S.NoAbilityCd = v
+        applyAbilities()
+        notify("Ability cooldown " .. (v and "0" or "normal"), v and "check" or "x")
+    end,
+})
+
+if Toggles.NoAbilityCd then
+    pcall(function()
+        Toggles.NoAbilityCd:AddKeyPicker("AbilityBind", { Text = "Ability cd bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 box:AddDivider("Status")
 
@@ -266,6 +321,7 @@ task.spawn(function()
                 S.Speed,
                 root and root.Position.Y or 0))
         end)
+        pcall(applyAbilities)
         task.wait(0.35)
     end
 end)
