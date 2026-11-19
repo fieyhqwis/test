@@ -1,6 +1,6 @@
 --=====================================================================
---  RAT 4080 — RAGDOLL BEASTS · INPUT SPAM
---  Re-sends the input snapshot with attack flags forced on.
+--  RAT 4080 — RAGDOLL BEASTS · ANTI-RAGDOLL
+--  Detects the beast being toppled and re-sends the recovery input.
 --=====================================================================
 
 local Players = game:GetService("Players")
@@ -11,17 +11,17 @@ local LP = Players.LocalPlayer
 
 local CFG = {
     HubName = "RAT 4080",
-    WindowTitle = "RAT 4080  //  BEASTS",
-    Footer = "input spam",
-    Icon = "paw-print",
+    WindowTitle = "RAT 4080  //  ANTI RAGDOLL",
+    Footer = "recover input",
+    Icon = "activity",
     Repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/",
     MenuKey = "RightShift",
 }
 
 local S = {
-    Spam = false,
+    Auto = true,
     Rate = 30,
-    ForceAttack = true,
+    Tilt = 0.55,
 }
 
 local Library, Window, Toggles, Options
@@ -64,38 +64,55 @@ Window = Library:CreateWindow({
 })
 
 local Tabs = {
-    Main = Window:AddTab("Input", "paw-print"),
+    Main = Window:AddTab("Recover", "activity"),
     Settings = Window:AddTab("Settings", "settings"),
 }
 
---=========================================================
---  CAPTURE + RESEND
---=========================================================
 local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("InputShapsnot")
+
+--=========================================================
+--  CAPTURE + RECOVERY SPAM
+--=========================================================
 local lastArgs = nil
-local sent = 0
 local installed = false
 local oldNamecall = nil
+local sent = 0
+local toppled = false
 
 local function install()
     if installed then return true end
     if type(hookmetamethod) ~= "function" then return false end
-
     oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
         if typeof(self) == "Instance" and self == remote then
             lastArgs = table.pack(...)
         end
         return oldNamecall(self, ...)
     end)
-
     installed = true
     return true
+end
+
+local function beastModel()
+    local ws = workspace
+    local rep = ws:FindFirstChild("Replicated")
+    if not rep then return nil end
+    return rep:FindFirstChild(LP.Name)
+end
+
+local function isToppled(model)
+    local torso = model and model:FindFirstChild("Torso", true)
+    if not torso then return false end
+    local up = torso.CFrame.UpVector
+    return math.abs(up.Y) < math.clamp(tonumber(S.Tilt) or 0.55, 0.1, 0.95)
 end
 
 local nextAt = 0
 
 RunService.Heartbeat:Connect(function()
-    if not S.Spam then return end
+    local model = beastModel()
+    toppled = isToppled(model)
+
+    if not S.Auto then return end
     if not lastArgs then return end
 
     local now = os.clock()
@@ -105,16 +122,9 @@ RunService.Heartbeat:Connect(function()
 
     local a1 = lastArgs[1]
     local a2 = lastArgs[2]
-    local a3 = lastArgs[3]
-    local a4 = lastArgs[4]
-
-    if S.ForceAttack then
-        a3 = true
-        a4 = true
-    end
 
     pcall(function()
-        remote:FireServer(a1, a2, a3, a4)
+        remote:FireServer(a1 or Vector2.zero, a2 or Vector2.zero, toppled, toppled)
     end)
     sent = sent + 1
 end)
@@ -122,22 +132,22 @@ end)
 --=========================================================
 --  UI
 --=========================================================
-local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Input", IconName = "paw-print" })
+local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Anti ragdoll", IconName = "activity" })
 
-box:AddToggle("Spam", {
-    Text = "Attack spam",
-    Default = false,
-    Tooltip = "Repeats your own input snapshot with attack flags forced on.",
+box:AddToggle("Auto", {
+    Text = "Recover instantly",
+    Default = true,
+    Tooltip = "When the beast is toppled it re-sends the recovery input at the chosen rate.",
     Callback = function(v)
-        S.Spam = v
+        S.Auto = v
         if v then install() end
-        Library:Notify({ Title = CFG.HubName, Description = "Spam " .. (v and "ON" or "OFF"), Icon = v and "check" or "x", Time = 2 })
+        Library:Notify({ Title = CFG.HubName, Description = "Recover " .. (v and "ON" or "OFF"), Icon = v and "check" or "x", Time = 2 })
     end,
 })
 
-if Toggles.Spam then
+if Toggles.Auto then
     pcall(function()
-        Toggles.Spam:AddKeyPicker("SpamBind", { Text = "Spam bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+        Toggles.Auto:AddKeyPicker("AutoBind", { Text = "Recover bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
     end)
 end
 
@@ -150,15 +160,19 @@ box:AddSlider("Rate", {
     Callback = function(v) S.Rate = v end,
 })
 
-box:AddToggle("ForceAttack", {
-    Text = "Force attack flags",
-    Default = true,
-    Callback = function(v) S.ForceAttack = v end,
+box:AddSlider("Tilt", {
+    Text = "Toppled threshold",
+    Default = S.Tilt,
+    Min = 0.1,
+    Max = 0.95,
+    Rounding = 2,
+    Tooltip = "Lower = only trigger when almost upside down.",
+    Callback = function(v) S.Tilt = v end,
 })
 
 box:AddDivider("Status")
 
-local status = box:AddLabel("waiting for input")
+local status = box:AddLabel("waiting")
 
 local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
 
@@ -168,15 +182,16 @@ menu:AddButton({ Text = "Unload", Icon = "power", Func = function() pcall(functi
 
 Library.ToggleKeybind = Options.MenuKeybind
 
+install()
+
 task.spawn(function()
     task.wait(1)
     while getgenv().__rat4080Beasts do
         pcall(function()
-            status:SetText(string.format("%s · %d/s · sent %d · %s",
-                S.Spam and "spamming" or "idle",
-                S.Rate,
-                sent,
-                lastArgs and "have snapshot" or "no snapshot yet"))
+            status:SetText(string.format("%s · toppled=%s · sent %d",
+                S.Auto and "armed" or "off",
+                tostring(toppled),
+                sent))
         end)
         task.wait(0.35)
     end
@@ -190,13 +205,13 @@ getgenv().__rat4080Beasts = {
 }
 
 Library:OnUnload(function()
-    S.Spam = false
+    S.Auto = false
     if installed and oldNamecall then
         pcall(function() hookmetamethod(game, "__namecall", oldNamecall) end)
     end
     getgenv().__rat4080Beasts = nil
 end)
 
-Library:Notify({ Title = CFG.HubName, Description = "Beasts spam ready · " .. CFG.MenuKey, Icon = "check", Time = 3 })
+Library:Notify({ Title = CFG.HubName, Description = "Anti ragdoll ready · " .. CFG.MenuKey, Icon = "check", Time = 3 })
 
 return { Library = Library, Window = Window, State = S }
