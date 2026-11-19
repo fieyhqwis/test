@@ -18,6 +18,7 @@ local CFG = {
 
 local S = {
     Nitro = true,
+    Power = 1.3,
 }
 
 local Library, Window, Toggles, Options
@@ -103,6 +104,27 @@ end
 
 local tankOf = nil
 local applied = false
+local nitroBase = nil
+
+local function applyPower(car)
+    local cfg = car._nitroCfg
+    if type(cfg) ~= "table" then return end
+
+    if not nitroBase then
+        nitroBase = {
+            Ground = tonumber(cfg.GroundThrust) or 0.45,
+            Air = tonumber(cfg.AirThrust) or 1.3,
+            Top = tonumber(cfg.TopSpeedAdd) or 20,
+            AirMax = tonumber(cfg.AirThrustMax) or 110,
+        }
+    end
+
+    local p = math.clamp(tonumber(S.Power) or 1, 1, 3)
+    cfg.GroundThrust = nitroBase.Ground * p
+    cfg.AirThrust = nitroBase.Air * p
+    cfg.TopSpeedAdd = nitroBase.Top * p
+    cfg.AirThrustMax = nitroBase.AirMax * p
+end
 
 local function nitroTick()
     local car = carController()
@@ -113,13 +135,27 @@ local function nitroTick()
     if not tankOf or tankOf <= 0 then
         tankOf = tonumber(car._nitroCfgTank) or 1
     end
-    if not S.Nitro then return end
+
+    if not S.Nitro then
+        if nitroBase then
+            local cfg = car._nitroCfg
+            if type(cfg) == "table" then
+                cfg.GroundThrust = nitroBase.Ground
+                cfg.AirThrust = nitroBase.Air
+                cfg.TopSpeedAdd = nitroBase.Top
+                cfg.AirThrustMax = nitroBase.AirMax
+            end
+        end
+        return
+    end
+
+    applyPower(car)
+
     if tonumber(car.nitro) ~= tankOf then
         car.nitro = tankOf
     end
     applied = true
 end
-
 --=========================================================
 --  UI
 --=========================================================
@@ -140,6 +176,16 @@ if Toggles.Nitro then
         Toggles.Nitro:AddKeyPicker("NitroBind", { Text = "Nitro bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
     end)
 end
+
+box:AddSlider("Power", {
+    Text = "Nitro power x",
+    Default = S.Power,
+    Min = 1,
+    Max = 3,
+    Rounding = 1,
+    Tooltip = "Multiplies nitro thrust. 1.3 is noticeable, 2+ is violent.",
+    Callback = function(v) S.Power = v end,
+})
 
 box:AddDivider("Status")
 
