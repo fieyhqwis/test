@@ -22,6 +22,7 @@ local S = {
     Nitro = true,
     Power = 1.3,
     Cursor = true,
+    Lamp = false,
 }
 
 local Library, Window, Toggles, Options
@@ -183,6 +184,45 @@ local function nitroTick()
 end
 
 --=========================================================
+--  LAMP HIT (coin source, no client cooldown)
+--=========================================================
+local lampRemote = nil
+local lastLampAt = {}
+
+local function lampHit()
+    if not lampRemote then
+        local shared = ReplicatedStorage:FindFirstChild("Shared")
+        local net = shared and shared:FindFirstChild("Net")
+        if not net then return end
+        local ok, Net = pcall(function() return require(net) end)
+        if ok and type(Net) == "table" and Net.client then
+            lampRemote = Net.client("LampHit")
+        end
+    end
+    if not lampRemote then return end
+
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local origin = cam.CFrame.Position
+    local now = os.clock()
+
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") then
+            local n = tostring(v.Name):lower()
+            if n:find("lamp") then
+                if (v.Position - origin).Magnitude < 300 then
+                    local last = lastLampAt[v] or -99
+                    if now - last > 0.15 then
+                        lastLampAt[v] = now
+                        pcall(function() lampRemote:FireServer(v, v.Position) end)
+                    end
+                end
+            end
+        end
+    end
+end
+
+--=========================================================
 --  UI
 --=========================================================
 local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Nitro", IconName = "flame" })
@@ -212,6 +252,24 @@ box:AddSlider("Power", {
     Tooltip = "Multiplies nitro thrust and top speed bonus. 1.5 is safe, 3+ is violent.",
     Callback = function(v) S.Power = v end,
 })
+
+box:AddDivider("Lamps")
+
+box:AddToggle("Lamp", {
+    Text = "Lamp hit spam (coins)",
+    Default = false,
+    Tooltip = "Fires LampHit for every lamp within 300 studs, ignoring the 11s client cooldown.",
+    Callback = function(v)
+        S.Lamp = v
+        notify("Lamp spam " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.Lamp then
+    pcall(function()
+        Toggles.Lamp:AddKeyPicker("LampBind", { Text = "Lamp bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 box:AddDivider("Status")
 
@@ -283,6 +341,9 @@ task.spawn(function()
     task.wait(1)
     while getgenv().__rat4080Drive do
         pcall(nitroTick)
+        pcall(function()
+            if S.Lamp then lampHit() end
+        end)
         pcall(function()
             local car = carController()
             if car then
