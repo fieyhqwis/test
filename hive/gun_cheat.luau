@@ -29,6 +29,7 @@ local S = {
     Headshot = true,
     NoHeat = true,
     InfAmmo = true,
+    DrillFuel = true,
 }
 
 local Library, Window, Toggles, Options
@@ -154,6 +155,17 @@ local function gunController()
     local loader = controllerLoader()
     local map = loader and loader._map
     return map and map.GunController or nil
+end
+
+local function drillFuelState()
+    local loader = controllerLoader()
+    local map = loader and loader._map
+    local drill = map and map.DrillController
+    local state = drill and drill._playerState
+    if not state then return nil end
+    local ok, entry = pcall(function() return state:Get("DrillFuel") end)
+    if ok and type(entry) == "table" then return entry end
+    return nil
 end
 
 --=========================================================
@@ -441,6 +453,24 @@ if Toggles.InfAmmo then
     end)
 end
 
+box:AddDivider("Drill")
+
+box:AddToggle("DrillFuel", {
+    Text = "Infinite drill fuel",
+    Default = true,
+    Tooltip = "Keeps the drill tank pinned at full and stops the drain.",
+    Callback = function(v)
+        S.DrillFuel = v
+        notify("Drill fuel " .. (v and "infinite" or "normal"), v and "check" or "x")
+    end,
+})
+
+if Toggles.DrillFuel then
+    pcall(function()
+        Toggles.DrillFuel:AddKeyPicker("FuelBind", { Text = "Drill fuel bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
 box:AddDivider("Headshot")
 
 box:AddToggle("Headshot", {
@@ -509,6 +539,18 @@ task.spawn(function()
                     end
                 end
             end
+
+            if S.DrillFuel then
+                local fuel = drillFuelState()
+                if fuel then
+                    local now = workspace:GetServerTimeNow()
+                    fuel.Level = 1
+                    fuel.Drain = 0
+                    fuel.Empty = false
+                    fuel.At = now
+                    fuel.RefillFrom = now
+                end
+            end
         end)
         task.wait(0.1)
     end
@@ -542,14 +584,23 @@ S.NoRecoil = true
 S.NoSpread = true
 S.Rapid = true
 S.Headshot = true
+S.NoHeat = true
+S.InfAmmo = true
+S.DrillFuel = true
 pcall(function() Toggles.NoRecoil:SetValue(true) end)
 pcall(function() Toggles.NoSpread:SetValue(true) end)
 pcall(function() Toggles.Rapid:SetValue(true) end)
 pcall(function() Toggles.Headshot:SetValue(true) end)
+pcall(function() Toggles.NoHeat:SetValue(true) end)
+pcall(function() Toggles.InfAmmo:SetValue(true) end)
+pcall(function() Toggles.DrillFuel:SetValue(true) end)
 S.NoRecoil = true
 S.NoSpread = true
 S.Rapid = true
 S.Headshot = true
+S.NoHeat = true
+S.InfAmmo = true
+S.DrillFuel = true
 
 applyAll()
 installHeadshot()
