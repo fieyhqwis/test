@@ -20,6 +20,7 @@ local S = {
     Nitro = true,
     Power = 1.3,
     Cursor = true,
+    Shop = false,
 }
 
 local Library, Window, Toggles, Options
@@ -208,7 +209,40 @@ box:AddSlider("Power", {
     Callback = function(v) S.Power = v end,
 })
 
-box:AddDivider("Status")
+box:AddDivider("Shop")
+
+box:AddToggle("ShopAnywhere", {
+    Text = "Shop anywhere",
+    Default = false,
+    Tooltip = "Opens the shop choice window without driving to a shop. Purchases still go through the server.",
+    Callback = function(v)
+        S.Shop = v
+        if v then
+            pcall(function() LP:SetAttribute("InShop", true) end)
+        end
+        notify("Shop anywhere " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.ShopAnywhere then
+    pcall(function()
+        Toggles.ShopAnywhere:AddKeyPicker("ShopBind", { Text = "Shop bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
+box:AddButton({
+    Text = "Open shop now",
+    Icon = "shopping-cart",
+    Func = function()
+        pcall(function() LP:SetAttribute("InShop", true) end)
+        local ok = pcall(function()
+            local Knit = require(ReplicatedStorage.Packages.Knit)
+            local sc = Knit.GetController("ShopChoiceController")
+            if sc and sc.show then sc:show(true) end
+        end)
+        if not ok then notify("Shop controller missing", "x") end
+    end,
+})
 
 local status = box:AddLabel("waiting for car")
 
@@ -278,6 +312,11 @@ task.spawn(function()
     task.wait(1)
     while getgenv().__rat4080Drive do
         pcall(nitroTick)
+        pcall(function()
+            if S.Shop then
+                LP:SetAttribute("InShop", true)
+            end
+        end)
         pcall(function()
             local car = carController()
             if car then
