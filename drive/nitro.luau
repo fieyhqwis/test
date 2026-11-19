@@ -213,18 +213,51 @@ box:AddDivider("Status")
 local status = box:AddLabel("waiting for car")
 
 local uis = game:GetService("UserInputService")
+local drawCursor = nil
 
-task.spawn(function()
-    task.wait(0.5)
-    while getgenv().__rat4080Drive do
-        pcall(function()
-            if S.Cursor and Window.MainFrame.Visible then
-                if uis.MouseIconEnabled ~= true then
-                    uis.MouseIconEnabled = true
-                end
-            end
-        end)
-        task.wait(0.25)
+connect(game:GetService("RunService").Heartbeat, function()
+    if not (S.Cursor and Window.MainFrame.Visible) then
+        if drawCursor then
+            drawCursor.dot.Visible = false
+            drawCursor.h1.Visible = false
+            drawCursor.h2.Visible = false
+        end
+        return
+    end
+
+    if uis.MouseIconEnabled ~= true then
+        pcall(function() uis.MouseIconEnabled = true end)
+    end
+
+    -- drawn fallback, visible even if the property is force-reset by the game
+    if not drawCursor then
+        local okDot, dot = pcall(function() return Drawing.new("Circle") end)
+        local okL, l1 = pcall(function() return Drawing.new("Line") end)
+        local okL2, l2 = pcall(function() return Drawing.new("Line") end)
+        if okDot and okL and okL2 then
+            dot.Radius = 4
+            dot.Thickness = 1
+            dot.Filled = true
+            dot.Color = Color3.fromRGB(120, 255, 160)
+            dot.NumSides = 24
+            l1.Thickness = 1
+            l1.Color = Color3.fromRGB(120, 255, 160)
+            l2.Thickness = 1
+            l2.Color = Color3.fromRGB(120, 255, 160)
+            drawCursor = { dot = dot, h1 = l1, h2 = l2 }
+        end
+    end
+
+    if drawCursor then
+        local p = uis:GetMouseLocation()
+        drawCursor.dot.Position = Vector2.new(p.X, p.Y)
+        drawCursor.dot.Visible = true
+        drawCursor.h1.From = Vector2.new(p.X - 9, p.Y)
+        drawCursor.h1.To = Vector2.new(p.X - 5, p.Y)
+        drawCursor.h1.Visible = true
+        drawCursor.h2.From = Vector2.new(p.X + 5, p.Y)
+        drawCursor.h2.To = Vector2.new(p.X + 9, p.Y)
+        drawCursor.h2.Visible = true
     end
 end)
 
@@ -277,6 +310,13 @@ getgenv().__rat4080Drive = {
 Library:OnUnload(function()
     S.Nitro = false
     restorePower()
+    if drawCursor then
+        pcall(function()
+            drawCursor.dot:Remove()
+            drawCursor.h1:Remove()
+            drawCursor.h2:Remove()
+        end)
+    end
     for _, c in ipairs(Signals) do pcall(function() c:Disconnect() end) end
     getgenv().__rat4080Drive = nil
 end)
