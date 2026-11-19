@@ -19,9 +19,9 @@ local CFG = {
 
 local S = {
     Auto = false,
-    Speed = 2.0,
+    Speed = 3.5,
     Spam = true,
-    Rate = 10,
+    Rate = 16,
 }
 
 local Library, Window, Toggles, Options
@@ -114,7 +114,7 @@ connect(RunService.Heartbeat, function()
     local anim = animator()
     if anim then
         spedTracks = 0
-        local speed = math.clamp(tonumber(S.Speed) or 1, 1, 5)
+        local speed = math.clamp(tonumber(S.Speed) or 1, 1, 10)
         local target = holding and speed or 1
         local ok, tracks = pcall(function() return anim:GetPlayingAnimationTracks() end)
         if ok and type(tracks) == "table" then
@@ -140,7 +140,7 @@ connect(RunService.Heartbeat, function()
         local tool = heldTool()
         if tool then
             local now = os.clock()
-            local rate = math.clamp(tonumber(S.Rate) or 10, 1, 20)
+            local rate = math.clamp(tonumber(S.Rate) or 16, 1, 40)
             if now >= nextActivate then
                 nextActivate = now + (1 / rate)
                 pcall(function() tool:Activate() end)
@@ -175,9 +175,9 @@ box:AddSlider("Speed", {
     Text = "Animation speed x",
     Default = S.Speed,
     Min = 1,
-    Max = 5,
+    Max = 10,
     Rounding = 1,
-    Tooltip = "2 = twice as fast stroke cycle. Above 3 looks unnatural.",
+    Tooltip = "3-4 reads as a fast player. 8+ breaks the animation.",
     Callback = function(v) S.Speed = v end,
 })
 
@@ -192,7 +192,7 @@ box:AddSlider("Rate", {
     Text = "Triggers per second",
     Default = S.Rate,
     Min = 1,
-    Max = 20,
+    Max = 40,
     Rounding = 0,
     Callback = function(v) S.Rate = v end,
 })
