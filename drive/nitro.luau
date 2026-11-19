@@ -105,25 +105,51 @@ end
 local tankOf = nil
 local applied = false
 local nitroBase = nil
+local nitroConfig = nil
 
-local function applyPower(car)
-    local cfg = car._nitroCfg
-    if type(cfg) ~= "table" then return end
+local function configNitro()
+    if nitroConfig then return nitroConfig end
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local cfgFolder = shared and shared:FindFirstChild("Config")
+    local mod = cfgFolder and cfgFolder:FindFirstChild("AbilityConfig")
+    if not mod then return nil end
+    local ok, A = pcall(function() return require(mod) end)
+    if ok and type(A) == "table" and type(A.Nitro) == "table" then
+        nitroConfig = A.Nitro
+    end
+    return nitroConfig
+end
+
+local function applyPower()
+    local nitro = configNitro()
+    if not nitro then return end
 
     if not nitroBase then
         nitroBase = {
-            Ground = tonumber(cfg.GroundThrust) or 0.45,
-            Air = tonumber(cfg.AirThrust) or 1.3,
-            Top = tonumber(cfg.TopSpeedAdd) or 20,
-            AirMax = tonumber(cfg.AirThrustMax) or 110,
+            Ground = tonumber(nitro.GroundThrust) or 0.45,
+            Air = tonumber(nitro.AirThrust) or 1.3,
+            Top = tonumber(nitro.TopSpeedAdd) or 20,
+            AirMax = tonumber(nitro.AirThrustMax) or 110,
+            Engine = tonumber(nitro.EngineScale) or 1.45,
         }
     end
 
     local p = math.clamp(tonumber(S.Power) or 1, 1, 3)
-    cfg.GroundThrust = nitroBase.Ground * p
-    cfg.AirThrust = nitroBase.Air * p
-    cfg.TopSpeedAdd = nitroBase.Top * p
-    cfg.AirThrustMax = nitroBase.AirMax * p
+    nitro.GroundThrust = nitroBase.Ground * p
+    nitro.AirThrust = nitroBase.Air * p
+    nitro.TopSpeedAdd = nitroBase.Top * p
+    nitro.AirThrustMax = nitroBase.AirMax * p
+    nitro.EngineScale = nitroBase.Engine * (1 + (p - 1) * 0.5)
+end
+
+local function restorePower()
+    local nitro = configNitro()
+    if not (nitro and nitroBase) then return end
+    nitro.GroundThrust = nitroBase.Ground
+    nitro.AirThrust = nitroBase.Air
+    nitro.TopSpeedAdd = nitroBase.Top
+    nitro.AirThrustMax = nitroBase.AirMax
+    nitro.EngineScale = nitroBase.Engine
 end
 
 local function nitroTick()
@@ -137,19 +163,11 @@ local function nitroTick()
     end
 
     if not S.Nitro then
-        if nitroBase then
-            local cfg = car._nitroCfg
-            if type(cfg) == "table" then
-                cfg.GroundThrust = nitroBase.Ground
-                cfg.AirThrust = nitroBase.Air
-                cfg.TopSpeedAdd = nitroBase.Top
-                cfg.AirThrustMax = nitroBase.AirMax
-            end
-        end
+        restorePower()
         return
     end
 
-    applyPower(car)
+    applyPower()
 
     if tonumber(car.nitro) ~= tankOf then
         car.nitro = tankOf
@@ -235,6 +253,7 @@ getgenv().__rat4080Drive = {
 
 Library:OnUnload(function()
     S.Nitro = false
+    restorePower()
     for _, c in ipairs(Signals) do pcall(function() c:Disconnect() end) end
     getgenv().__rat4080Drive = nil
 end)

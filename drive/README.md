@@ -40,16 +40,19 @@ Nitro
 
 ## Nitro power
 
-Multiplies the car's own nitro parameters:
+The thrust values live in `ReplicatedStorage.Shared.Config.AbilityConfig.Nitro`
+(the car controller reads `AbilityConfig.Nitro` every frame, not its own copy).
 
 ```
-GroundThrust   0.45 -> 0.585  (x1.3)
-AirThrust      1.30 -> 1.69
-TopSpeedAdd    20   -> 26
-AirThrustMax   110  -> 143
+GroundThrust   0.45  -> 0.675   (x1.5)
+AirThrust      1.30  -> 1.95
+TopSpeedAdd    20    -> 30
+AirThrustMax   110   -> 165
+EngineScale    1.45  -> 1.8125
 ```
 
-At x2: ground 0.90, air 2.60, top +40. Above x2.5 the car starts flipping on landings.
+At x3: ground 1.35, air 3.90, top +60, engine 2.9. That is where the car starts
+flipping on landings.
 
 ## Notes
 
