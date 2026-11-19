@@ -20,13 +20,14 @@ local S = {
     Nitro = true,
     Power = 1.3,
     Cursor = true,
-    Shop = false,
     Instant = true,
+    Roll = true,
+    Stack = true,
 }
 
 local Library, Window, Toggles, Options
 local Signals = {}
-local shopKeyHeld = false
+local rollKeyHeld = false
 
 local function connect(sig, fn)
     local c = sig:Connect(fn)
@@ -203,6 +204,8 @@ local function applyInstant()
             Roll = tonumber(I.RollSeconds) or 1.8,
             Hold = tonumber(I.RollHold) or 0.9,
             Replace = tonumber(I.ReplaceSeconds) or 5,
+            MaxStack = tonumber(I.MaxStack) or 5,
+            Perma = tonumber(I.PermaCooldown) or 20,
         }
     end
     if S.Instant then
@@ -214,6 +217,14 @@ local function applyInstant()
         I.RollHold = itemBase.Hold
         I.ReplaceSeconds = itemBase.Replace
     end
+
+    if S.Stack then
+        I.MaxStack = 99
+        I.PermaCooldown = 0
+    else
+        I.MaxStack = itemBase.MaxStack
+        I.PermaCooldown = itemBase.Perma
+    end
 end
 
 local function restoreInstant()
@@ -224,22 +235,36 @@ local function restoreInstant()
     I.ReplaceSeconds = itemBase.Replace
 end
 
-local function shopKeyOption()
-    return Options and Options.ShopKey
+--=========================================================
+--  SPIN / ROLL
+--=========================================================
+local KnitRef = nil
+
+local function spinController()
+    if not KnitRef then
+        local packages = ReplicatedStorage:FindFirstChild("Packages")
+        local mod = packages and packages:FindFirstChild("Knit")
+        if not mod then return nil end
+        local ok, K = pcall(function() return require(mod) end)
+        if ok and type(K) == "table" then KnitRef = K end
+    end
+    if not KnitRef then return nil end
+    local ok, sc = pcall(function() return KnitRef.GetController("SpinController") end)
+    if ok and type(sc) == "table" then return sc end
+    return nil
 end
 
-local function openShopAnywhere()
-    pcall(function() LP:SetAttribute("InShop", true) end)
+local function rollOnce()
+    local sc = spinController()
+    if not sc then return false end
     pcall(function()
-        local Knit = require(ReplicatedStorage.Packages.Knit)
-        local sc = Knit.GetController("ShopChoiceController")
-        if sc and sc.show then sc:show(true) end
+        if sc.openViewer then sc:openViewer() end
     end)
+    if sc._request then
+        pcall(function() sc._request:FireServer(1) end)
+    end
+    return true
 end
-
---=========================================================
---  UI
---=========================================================
 local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Nitro", IconName = "flame" })
 
 box:AddToggle("Nitro", {
@@ -268,31 +293,30 @@ box:AddSlider("Power", {
     Callback = function(v) S.Power = v end,
 })
 
-box:AddDivider("Shop")
+box:AddDivider("Roll")
 
-box:AddToggle("ShopAnywhere", {
-    Text = "Shop anywhere",
+box:AddToggle("Roll", {
+    Text = "Roll ability (bind)",
     Default = false,
-    Tooltip = "Opens the shop choice window without driving to a shop. Purchases still go through the server.",
+    Tooltip = "Press the bind to spin the item roll without driving anywhere.",
     Callback = function(v)
-        S.Shop = v
-        if v then
-            pcall(function() LP:SetAttribute("InShop", true) end)
-        end
-        notify("Shop anywhere " .. (v and "ON" or "OFF"), v and "check" or "x")
+        S.Roll = v
+        notify("Roll bind " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
 
-if Toggles.ShopAnywhere then
+if Toggles.Roll then
     pcall(function()
-        Toggles.ShopAnywhere:AddKeyPicker("ShopBind", { Text = "Shop bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+        Toggles.Roll:AddKeyPicker("RollKey", { Text = "Roll key", Default = "None", Mode = "Hold" })
     end)
 end
 
 box:AddButton({
-    Text = "Open shop now",
-    Icon = "shopping-cart",
-    Func = function() openShopAnywhere() end,
+    Text = "Roll now",
+    Icon = "dice-5",
+    Func = function()
+        if not rollOnce() then notify("Spin controller missing", "x") end
+    end,
 })
 
 box:AddToggle("Instant", {
@@ -309,6 +333,23 @@ box:AddToggle("Instant", {
 if Toggles.Instant then
     pcall(function()
         Toggles.Instant:AddKeyPicker("InstantBind", { Text = "Instant pickup bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
+box:AddToggle("Stack", {
+    Text = "Abilities: stack 99, no cooldown",
+    Default = true,
+    Tooltip = "Raises the client stack cap and zeroes the ability cooldown. Server may still cap counts.",
+    Callback = function(v)
+        S.Stack = v
+        applyInstant()
+        notify("Ability stack " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.Stack then
+    pcall(function()
+        Toggles.Stack:AddKeyPicker("StackBind", { Text = "Stack bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
     end)
 end
 
@@ -375,7 +416,6 @@ end)
 local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
 
 menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = CFG.MenuKey, NoUI = true, Text = "Menu keybind" })
-menu:AddLabel("Shop key"):AddKeyPicker("ShopKey", { Default = "None", Mode = "Hold", Text = "Open shop" })
 menu:AddToggle("Cursor", { Text = "Force cursor while menu open", Default = true, Callback = function(v) S.Cursor = v end })
 menu:AddToggle("CustomCursor", { Text = "Fallback cursor", Default = true, Callback = function() end })
 menu:AddButton({ Text = "Close menu", Icon = "x", Func = function() pcall(function() Window:Toggle(false) end) end })
@@ -392,19 +432,14 @@ task.spawn(function()
         pcall(nitroTick)
         pcall(applyInstant)
         pcall(function()
-            if S.Shop then
-                LP:SetAttribute("InShop", true)
-            end
-        end)
-        pcall(function()
-            local key = shopKeyOption()
+            local key = Options and Options.RollKey
             if key then
                 local ok, state = pcall(function() return key:GetState() end)
-                if ok and state and not shopKeyHeld then
-                    shopKeyHeld = true
-                    openShopAnywhere()
+                if ok and state and not rollKeyHeld then
+                    rollKeyHeld = true
+                    rollOnce()
                 elseif ok and not state then
-                    shopKeyHeld = false
+                    rollKeyHeld = false
                 end
             end
         end)
@@ -426,12 +461,15 @@ end)
 S.Nitro = true
 S.Cursor = true
 S.Instant = true
+S.Stack = true
 pcall(function() Toggles.Nitro:SetValue(true) end)
 pcall(function() Toggles.Cursor:SetValue(true) end)
 pcall(function() Toggles.Instant:SetValue(true) end)
+pcall(function() Toggles.Stack:SetValue(true) end)
 S.Nitro = true
 S.Cursor = true
 S.Instant = true
+S.Stack = true
 applyInstant()
 
 getgenv().__rat4080Drive = {
