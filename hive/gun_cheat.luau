@@ -1,18 +1,17 @@
 --=====================================================================
---  RAT 4080 — INTO THE HIVE · GUN CHEAT
---  Patches the weapon def the client actually fires with.
+--  RAT 4080 — INTO THE HIVE
+--  no recoil · no spread · magazine · fire rate · headshot rewrite
 --=====================================================================
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 local LP = Players.LocalPlayer
 
 local CFG = {
     HubName = "RAT 4080",
-    WindowTitle = "RAT 4080  //  HIVE GUNS",
+    WindowTitle = "RAT 4080  //  HIVE",
     Footer = "recoil · spread · mag · rate",
     Icon = "crosshair",
     Repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/",
@@ -24,16 +23,10 @@ local CFG = {
 local S = {
     NoRecoil = true,
     NoSpread = true,
-    Magazine = 0,       -- 0 = leave the real magazine alone
+    Magazine = 0,      -- 0 = leave the real magazine alone
     Rapid = true,
     RapidMult = 1.3,
-    WeakAim = false,
-    AimStrength = 0.35,
-    Silent = false,
-    Fov = 280,
-    HeadAll = false,
-    Grenades = false,
-    Turret = false,
+    Headshot = true,
 }
 
 local Library, Window, Toggles, Options
@@ -97,7 +90,7 @@ local function notify(text, icon)
 end
 
 --=========================================================
---  CONFIG FILE
+--  CONFIG (sliders only)
 --=========================================================
 local saveQueued = false
 
@@ -156,15 +149,14 @@ local function controllerLoader()
 end
 
 local function gunController()
-    local map = controllerLoader() and loaderModule._map
+    local loader = controllerLoader()
+    local map = loader and loader._map
     return map and map.GunController or nil
 end
 
 --=========================================================
 --  WEAPON PATCH
 --=========================================================
--- base[name] keeps the untouched values, written* keeps what we last wrote,
--- so an augments/level rewrite is picked up without stacking multipliers.
 local base = getgenv().__rat4080HiveBase
 if type(base) ~= "table" then
     base = {}
@@ -216,20 +208,15 @@ local function modDef(def, name)
     end
 
     if type(st.rate) == "number" then
-        local rate = st.rate
-        if S.Rapid then
-            rate = rate * S.RapidMult
-        end
-        -- never write something absurd, that is how a gun stops shooting
+        local rate = S.Rapid and (st.rate * S.RapidMult) or st.rate
         if rate >= 0.2 and rate <= 500 then
             def.Rate = rate
         end
     end
 
-    st.writtenRate = def.Rate
-    st.writtenMag = def.Magazine
     return true
 end
+
 local patched = 0
 
 local function applyAll()
@@ -241,7 +228,6 @@ local function applyAll()
         end
     end
 
-    -- the controller keeps its own copy of the def, that is what actually fires
     local gun = gunController()
     if gun and gun._def and gun._name then
         modDef(gun._def, gun._name)
@@ -273,198 +259,19 @@ local function restoreAll()
 end
 
 --=========================================================
---  ABILITIES
+--  HEADSHOT REWRITE (real hit packet, head flag forced)
 --=========================================================
-local abilityOriginals = {}
-
-local function patchAbilities()
-    local C = combat()
-    if not C then return end
-
-    local okTu, Tu = pcall(function() return require(C.Turrets) end)
-    if okTu and type(Tu) == "table" then
-        if abilityOriginals.turretRecharge == nil then
-            abilityOriginals.turretRecharge = Tu.Recharge
-        end
-        Tu.Recharge = S.Turret and 0 or abilityOriginals.turretRecharge
-    end
-end
-
-local aimAssistOriginals = nil
-
-local function patchAimAssist()
-    local shared = ReplicatedStorage:FindFirstChild("Shared")
-    local cfgFolder = shared and shared:FindFirstChild("Config")
-    local mod = cfgFolder and cfgFolder:FindFirstChild("AimAssist")
-    if not mod then return end
-    local ok, cfg = pcall(function() return require(mod) end)
-    if not ok or type(cfg) ~= "table" then return end
-
-    if not aimAssistOriginals then
-        aimAssistOriginals = {
-            Range = cfg.Range,
-            Cone = cfg.Cone and { Aim = cfg.Cone.Aim, Hip = cfg.Cone.Hip },
-            Pull = cfg.Pull and { Aim = cfg.Pull.Aim, Hip = cfg.Pull.Hip },
-            Follow = cfg.Follow and { Hip = cfg.Follow.Hip, Aim = cfg.Follow.Aim },
-            Firing = cfg.Firing and { Aim = cfg.Firing.Aim, Hip = cfg.Firing.Hip },
-            Slowdown = cfg.Slowdown and { Aim = cfg.Slowdown.Aim, Hip = cfg.Slowdown.Hip },
-        }
-    end
-
-    local o = aimAssistOriginals
-    if not S.WeakAim then
-        cfg.Range = o.Range
-        if cfg.Cone and o.Cone then cfg.Cone.Aim, cfg.Cone.Hip = o.Cone.Aim, o.Cone.Hip end
-        if cfg.Pull and o.Pull then cfg.Pull.Aim, cfg.Pull.Hip = o.Pull.Aim, o.Pull.Hip end
-        if cfg.Follow and o.Follow then cfg.Follow.Aim, cfg.Follow.Hip = o.Follow.Aim, o.Follow.Hip end
-        if cfg.Firing and o.Firing then cfg.Firing.Aim, cfg.Firing.Hip = o.Firing.Aim, o.Firing.Hip end
-        if cfg.Slowdown and o.Slowdown then cfg.Slowdown.Aim, cfg.Slowdown.Hip = o.Slowdown.Aim, o.Slowdown.Hip end
-        return
-    end
-
-    cfg.Range = 400
-    if cfg.Cone then cfg.Cone.Aim, cfg.Cone.Hip = 45, 45 end
-    if cfg.Pull then cfg.Pull.Aim, cfg.Pull.Hip = 1, 1 end
-    if cfg.Follow then cfg.Follow.Aim, cfg.Follow.Hip = 1, 1 end
-    if cfg.Firing then cfg.Firing.Aim, cfg.Firing.Hip = 80, 80 end
-    if cfg.Slowdown then cfg.Slowdown.Aim, cfg.Slowdown.Hip = 0, 0 end
-end
-
-local function refresh()
-    local n = applyAll()
-    patchAbilities()
-    return n
-end
-
---=========================================================
---  WEAK SPOT AIM
---=========================================================
-local aimOriginals = {}
-
-local function bugController()
-    local loader = controllerLoader()
-    local map = loader and loader._map
-    return map and map.BugController or nil
-end
-
-local function bugWeakPoint(entry)
-    if type(entry) ~= "table" then return nil end
-    local rig = entry.Rig
-    local bestY, bestX, bestZ = nil, nil, nil
-
-    if type(rig) == "table" and type(rig.CFrames) == "table" then
-        local cf = rig.CFrames
-        -- flat layout: 12 numbers per CFrame, first three are the position
-        for i = 1, #cf - 11, 12 do
-            local px, py, pz = cf[i], cf[i + 1], cf[i + 2]
-            if type(py) == "number" and (not bestY or py > bestY) then
-                bestY, bestX, bestZ = py, px, pz
-            end
-        end
-    end
-
-    if bestY and bestX and bestZ then
-        return Vector3.new(bestX, bestY + 0.35, bestZ)
-    end
-
-    local pos = entry.Pos
-    if typeof(pos) == "Vector3" then
-        local h = tonumber(rig and rig._b) or 2.6
-        return pos + Vector3.new(0, h, 0)
-    end
-    return nil
-end
-
-local function bugTargets()
-    local list = {}
-    local ctrl = bugController()
-    local bugs = ctrl and ctrl._bugs
-    if type(bugs) == "table" then
-        for _, entry in pairs(bugs) do
-            local point = bugWeakPoint(entry)
-            if point then list[#list + 1] = { pos = point, id = tonumber(entry.Id), health = tonumber(entry.Health) } end
-        end
-    end
-    return list
-end
-
-local function nestTargets()
-    local list = {}
-    local nests = workspace:FindFirstChild("Nests")
-    if nests then
-        for _, nest in ipairs(nests:GetChildren()) do
-            local core = nest:FindFirstChild("Core", true)
-            if core and core:IsA("BasePart") then
-                list[#list + 1] = { pos = core.Position }
-            end
-        end
-    end
-    return list
-end
-
--- lobby firing range: the centre plate is the weak spot
-local function rangeTargets()
-    local list = {}
-    for _, v in ipairs(workspace:GetDescendants()) do
-        if v:IsA("BasePart") and (v.Name == "Weakpoint" or v.Name == "WeakPoint") then
-            list[#list + 1] = { pos = v.Position }
-            if #list >= 12 then break end
-        end
-    end
-    return list
-end
-
-local aimEnabled = false
-local aimKeyOption = nil
-local headKeyOption = nil
-local headEnabled = false
-local lastHeadPacket = 0
-
-local function aimHeld()
-    if not aimKeyOption then return false end
-    local ok, state = pcall(function() return aimKeyOption:GetState() end)
-    return ok and state == true
-end
-
-local function wallClear(targetPos)    local cam = workspace.CurrentCamera
-    if not cam then return false end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local ignore = { LP.Character }
-    local nests = workspace:FindFirstChild("Nests")
-    if nests then ignore[#ignore + 1] = nests end
-    params.FilterDescendantsInstances = ignore
-    params.IgnoreWater = true
-    local dir = targetPos - cam.CFrame.Position
-    local hit = workspace:Raycast(cam.CFrame.Position, dir, params)
-    if not hit then return true end
-    return (hit.Position - targetPos).Magnitude < 3
-end
-
-local hitsRemote = nil
-
-local function gunHitsRemote()
-    if hitsRemote then return hitsRemote end
-    local shared = ReplicatedStorage:FindFirstChild("Shared")
-    local remotesFolder = shared and shared:FindFirstChild("Remotes")
-    local mod = remotesFolder and remotesFolder:FindFirstChild("Remotes")
-    if not mod then return nil end
-    local ok, Remotes = pcall(function() return require(mod) end)
-    if not ok or type(Remotes) ~= "table" or type(Remotes.Event) ~= "function" then return nil end
-    local ok2, remote = pcall(function() return Remotes.Event("GunHits") end)
-    if ok2 then hitsRemote = remote end
-    return hitsRemote
-end
-
--- every shot you register is rewritten as a head hit before it leaves the client
 local sendHitsOriginal = nil
+local headHooked = false
 
-local function installHeadHook()
+local function installHeadshot()
     local gun = gunController()
-    if not gun or sendHitsOriginal or type(gun._sendHits) ~= "function" then return false end
+    if not gun or type(gun._sendHits) ~= "function" then return false end
+    if headHooked then return true end
+
     sendHitsOriginal = gun._sendHits
     gun._sendHits = function(self, t)
-        if S.HeadAll then
+        if S.Headshot then
             local hits = self._hits
             if type(hits) == "table" then
                 for i = 1, #hits do
@@ -480,115 +287,18 @@ local function installHeadHook()
         end
         return sendHitsOriginal(self, t)
     end
+    headHooked = true
     return true
 end
 
-local function uninstallHeadHook()
+local function uninstallHeadshot()
     local gun = gunController()
-    if gun and sendHitsOriginal then gun._sendHits = sendHitsOriginal end
+    if gun and sendHitsOriginal then
+        gun._sendHits = sendHitsOriginal
+    end
     sendHitsOriginal = nil
+    headHooked = false
 end
-
---=========================================================
---  SILENT AIM (injects the real hit batch, no camera movement)
---=========================================================
-local silentInstalled = false
-local silentBase = nil
-
-local function silentTargets()
-    local cam = workspace.CurrentCamera
-    if not cam then return {} end
-    local list = {}
-    local ctrl = bugController()
-    local bugs = ctrl and ctrl._bugs
-    if type(bugs) ~= "table" then return list end
-
-    local center = cam.ViewportSize * 0.5
-    for _, entry in ipairs(bugs) do
-        if type(entry) == "table" and entry.Id then
-            local point = bugWeakPoint(entry)
-            if point then
-                local sp, on = cam:WorldToViewportPoint(point)
-                if on and sp.Z > 0 then
-                    local px = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                    local dist = (point - cam.CFrame.Position).Magnitude
-                    if px <= S.Fov and dist < 400 and wallClear(point) then
-                        list[#list + 1] = { id = entry.Id, dist = dist, px = px }
-                    end
-                end
-            end
-        end
-    end
-    table.sort(list, function(a, b) return a.px < b.px end)
-    return list
-end
-
-local function installSilent()
-    local gun = gunController()
-    if not gun or silentInstalled or type(gun._sendHits) ~= "function" then return false end
-    silentBase = gun._sendHits
-    gun._sendHits = function(self, t)
-        if S.Silent then
-            local hits = self._hits
-            if type(hits) == "table" then
-                local targets = silentTargets()
-                for i = 1, math.min(#targets, 3) do
-                    hits[#hits + 1] = { targets[i].id, false, 0, 0, false }
-                end
-            end
-        end
-        return silentBase(self, t)
-    end
-    silentInstalled = true
-    return true
-end
-
-local function uninstallSilent()
-    local gun = gunController()
-    if silentInstalled and gun and silentBase then
-        gun._sendHits = silentBase
-    end
-    silentInstalled = false
-    silentBase = nil
-end
-
-RunService:BindToRenderStep("RAT4080WeakAim", Enum.RenderPriority.Camera.Value + 2, function()    if not aimEnabled or not aimHeld() then return end
-    local cam = workspace.CurrentCamera
-    if not cam then return end
-
-    local targets = bugTargets()
-    if #targets == 0 then targets = rangeTargets() end
-    if #targets == 0 then targets = nestTargets() end
-    if #targets == 0 then return end
-
-    local camPos = cam.CFrame.Position
-    local viewport = cam.ViewportSize
-    local center = viewport * 0.5
-    local bestPos, bestScore = nil, math.huge
-
-    for _, t in ipairs(targets) do
-        local sp, on = cam:WorldToViewportPoint(t.pos)
-        if on and sp.Z > 0 then
-            local screenDist = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-            local worldDist = (t.pos - camPos).Magnitude
-            if screenDist < 320 and worldDist < 400 and wallClear(t.pos) then
-                local score = screenDist + worldDist * 0.1
-                if score < bestScore then
-                    bestScore, bestPos = score, t.pos
-                end
-            end
-        end
-    end
-
-    if not bestPos then return end
-
-    local current = cam.CFrame.LookVector
-    local want = (bestPos - camPos).Unit
-    local alpha = math.clamp(S.AimStrength, 0.05, 1)
-    local blended = current:Lerp(want, alpha)
-    if blended.Magnitude < 0.01 then return end
-    cam.CFrame = CFrame.lookAt(camPos, camPos + blended.Unit)
-end)
 
 --=========================================================
 --  UI
@@ -598,13 +308,19 @@ local box = Tabs.Guns:AddGroupbox({ Side = "Left", Name = "Weapon", IconName = "
 box:AddToggle("NoRecoil", {
     Text = "No recoil",
     Default = true,
-    Tooltip = "Zeroes the camera kick and the spray pattern. Client side.",
+    Tooltip = "Zeroes the camera kick and the spray pattern.",
     Callback = function(v)
         S.NoRecoil = v
-        refresh()
+        applyAll()
         notify("No recoil " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
+
+if Toggles.NoRecoil then
+    pcall(function()
+        Toggles.NoRecoil:AddKeyPicker("RecoilBind", { Text = "No recoil bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 box:AddToggle("NoSpread", {
     Text = "No spread",
@@ -612,10 +328,16 @@ box:AddToggle("NoSpread", {
     Tooltip = "Kills base spread, aim spread and bloom.",
     Callback = function(v)
         S.NoSpread = v
-        refresh()
+        applyAll()
         notify("No spread " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
+
+if Toggles.NoSpread then
+    pcall(function()
+        Toggles.NoSpread:AddKeyPicker("SpreadBind", { Text = "No spread bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 box:AddSlider("Magazine", {
     Text = "Magazine size",
@@ -623,9 +345,10 @@ box:AddSlider("Magazine", {
     Min = 0,
     Max = 300,
     Rounding = 0,
-    Tooltip = "0 keeps the real magazine. Bigger mag, not infinite ammo.",    Callback = function(v)
+    Tooltip = "0 keeps the real magazine.",
+    Callback = function(v)
         S.Magazine = v
-        refresh()
+        applyAll()
         saveConfig()
     end,
 })
@@ -633,13 +356,19 @@ box:AddSlider("Magazine", {
 box:AddToggle("Rapid", {
     Text = "Faster fire",
     Default = true,
-    Tooltip = "Speeds up shooting and the charge build on charge weapons.",
+    Tooltip = "Small multiplier on the fire rate.",
     Callback = function(v)
         S.Rapid = v
-        refresh()
+        applyAll()
         notify("Faster fire " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
+
+if Toggles.Rapid then
+    pcall(function()
+        Toggles.Rapid:AddKeyPicker("RapidBind", { Text = "Faster fire bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 box:AddSlider("RapidMult", {
     Text = "Fire rate x",
@@ -647,87 +376,37 @@ box:AddSlider("RapidMult", {
     Min = 1.05,
     Max = 2.5,
     Rounding = 2,
-    Tooltip = "1.3 = +30%. Applies to both tap shots and charge speed.",
-    Callback = function(v) S.RapidMult = v; refresh(); saveConfig() end,
+    Tooltip = "1.3 = +30%. Above 1.6 the server starts eating shots.",
+    Callback = function(v) S.RapidMult = v; applyAll(); saveConfig() end,
 })
+
+box:AddDivider("Headshot")
+
+box:AddToggle("Headshot", {
+    Text = "All hits = headshot",
+    Default = true,
+    Tooltip = "Rewrites the head flag inside your real hit packet before it is sent.",
+    Callback = function(v)
+        S.Headshot = v
+        if v then installHeadshot() else uninstallHeadshot() end
+        notify("Headshot rewrite " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.Headshot then
+    pcall(function()
+        Toggles.Headshot:AddKeyPicker("HeadBind", { Text = "Headshot bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 box:AddButton({
     Text = "Re-apply",
     Icon = "rotate-ccw",
     Func = function()
-        local n = refresh()
+        local n = applyAll()
+        installHeadshot()
         notify("Patched " .. tostring(n) .. " weapons", "check")
     end,
-})
-
-box:AddDivider("Aim")
-
-box:AddToggle("WeakAim", {
-    Text = "Aim at weak spot",
-    Default = false,
-    Tooltip = "Smoothly pulls the crosshair onto the weak part (head / core) of the nearest target on screen.",
-    Callback = function(v)
-        S.WeakAim = v
-        aimEnabled = v
-        refresh()
-        notify("Weak spot aim " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
-box:AddSlider("AimStrength", {
-    Text = "Aim strength",
-    Default = S.AimStrength,
-    Min = 0.05,
-    Max = 1,
-    Rounding = 2,
-    Tooltip = "0.2 = мягкая подтяжка, 0.5 = заметная, 1 = резкий снап. Ниже 0.4 камера не дёргается.",
-    Callback = function(v) S.AimStrength = v end,
-})
-
-if Toggles.WeakAim then
-    pcall(function()
-        Toggles.WeakAim:AddKeyPicker("WeakBind", {
-            Text = "Aim bind (hold)",
-            Default = "None",
-            Mode = "Hold",
-            SyncToggleState = false,
-            NoUI = false,
-        })
-    end)
-end
-
-aimKeyOption = Options.WeakBind
-
-box:AddDivider("Silent aim")
-
-box:AddToggle("Silent", {
-    Text = "Silent aim (FOV)",
-    Default = false,
-    Tooltip = "Adds hits for bugs inside the circle into your real shot packet. Camera never moves.",
-    Callback = function(v)
-        S.Silent = v
-        if v then installSilent() else uninstallSilent() end
-        notify("Silent aim " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
-box:AddSlider("Fov", {
-    Text = "FOV radius",
-    Default = S.Fov,
-    Min = 60,
-    Max = 700,
-    Rounding = 0,
-    Suffix = " px",
-    Callback = function(v) S.Fov = v end,
-})
-
-box:AddDivider("Abilities")
-
-box:AddToggle("Turret", {
-    Text = "Turret no cooldown",
-    Default = false,
-    Tooltip = "Sets the turret recharge to 0.",
-    Callback = function(v) S.Turret = v; refresh(); notify("Turret cd " .. (v and "off" or "normal"), "check") end,
 })
 
 box:AddDivider("Status")
@@ -738,51 +417,15 @@ task.spawn(function()
     task.wait(2)
     while getgenv().__rat4080Hive do
         pcall(function()
-            refresh()
-            status:SetText(string.format("weapons %d  ·  mag %s  ·  rate x%.2f  ·  grenade %s",
+            applyAll()
+            if S.Headshot and not headHooked then installHeadshot() end
+            status:SetText(string.format("weapons %d  ·  mag %s  ·  rate x%.2f  ·  head %s",
                 patched,
                 S.Magazine > 0 and tostring(S.Magazine) or "real",
                 S.Rapid and S.RapidMult or 1,
-                S.Grenades and "99" or "normal"))
+                S.Headshot and "forced" or "normal"))
         end)
-        task.wait(0.5)
-    end
-end)
-
-task.spawn(function()
-    task.wait(2)
-    while getgenv().__rat4080Hive do
         task.wait(1)
-    end
-end)
-
-local fovCircle = nil
-
-task.spawn(function()
-    task.wait(2)
-    while getgenv().__rat4080Hive do
-        task.wait(0.05)
-        if S.Silent then
-            if not fovCircle then
-                local ok, circle = pcall(function() return Drawing.new("Circle") end)
-                if ok and circle then
-                    fovCircle = circle
-                    circle.Thickness = 1
-                    circle.Color = Color3.fromRGB(120, 255, 160)
-                    circle.Filled = false
-                    circle.NumSides = 64
-                    circle.Transparency = 1
-                end
-            end
-            local cam = workspace.CurrentCamera
-            if fovCircle and cam then
-                fovCircle.Position = cam.ViewportSize * 0.5
-                fovCircle.Radius = S.Fov
-                fovCircle.Visible = true
-            end
-        elseif fovCircle then
-            fovCircle.Visible = false
-        end
     end
 end)
 
@@ -813,34 +456,36 @@ end
 S.NoRecoil = true
 S.NoSpread = true
 S.Rapid = true
+S.Headshot = true
 pcall(function() Toggles.NoRecoil:SetValue(true) end)
 pcall(function() Toggles.NoSpread:SetValue(true) end)
 pcall(function() Toggles.Rapid:SetValue(true) end)
+pcall(function() Toggles.Headshot:SetValue(true) end)
 S.NoRecoil = true
 S.NoSpread = true
 S.Rapid = true
+S.Headshot = true
 
-refresh()
+applyAll()
+installHeadshot()
 
 getgenv().__rat4080Hive = {
     State = S,
     Library = Library,
     Signals = Signals,
-    Apply = refresh,
+    Apply = applyAll,
     Restore = restoreAll,
     Count = function() return patched end,
+    InstallHeadshot = installHeadshot,
 }
 
 Library:OnUnload(function()
     restoreAll()
-    uninstallHeadHook()
-    uninstallSilent()
-    if fovCircle then pcall(function() fovCircle:Remove() end) end
-    pcall(function() RunService:UnbindFromRenderStep("RAT4080WeakAim") end)
+    uninstallHeadshot()
     for _, c in ipairs(Signals) do pcall(function() c:Disconnect() end) end
     getgenv().__rat4080Hive = nil
 end)
 
-notify(string.format("Hive guns ready · %d weapons · %s", patched, CFG.MenuKey), "check")
+notify(string.format("Hive ready · %d weapons · %s", patched, CFG.MenuKey), "check")
 
 return { Library = Library, Window = Window, State = S }
