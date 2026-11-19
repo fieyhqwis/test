@@ -134,12 +134,12 @@ local function applyPower()
         }
     end
 
-    local p = math.clamp(tonumber(S.Power) or 1, 1, 3)
+    local p = math.clamp(tonumber(S.Power) or 1, 1, 8)
     nitro.GroundThrust = nitroBase.Ground * p
     nitro.AirThrust = nitroBase.Air * p
     nitro.TopSpeedAdd = nitroBase.Top * p
     nitro.AirThrustMax = nitroBase.AirMax * p
-    nitro.EngineScale = nitroBase.Engine * (1 + (p - 1) * 0.5)
+    nitro.EngineScale = nitroBase.Engine * p
 end
 
 local function restorePower()
@@ -153,6 +153,15 @@ local function restorePower()
 end
 
 local function nitroTick()
+    if not S.Nitro then
+        restorePower()
+        applied = false
+        return
+    end
+
+    -- config level, works even before a car spawns
+    applyPower()
+
     local car = carController()
     if not car then
         applied = false
@@ -161,13 +170,6 @@ local function nitroTick()
     if not tankOf or tankOf <= 0 then
         tankOf = tonumber(car._nitroCfgTank) or 1
     end
-
-    if not S.Nitro then
-        restorePower()
-        return
-    end
-
-    applyPower()
 
     if tonumber(car.nitro) ~= tankOf then
         car.nitro = tankOf
@@ -199,9 +201,9 @@ box:AddSlider("Power", {
     Text = "Nitro power x",
     Default = S.Power,
     Min = 1,
-    Max = 3,
+    Max = 8,
     Rounding = 1,
-    Tooltip = "Multiplies nitro thrust. 1.3 is noticeable, 2+ is violent.",
+    Tooltip = "Multiplies nitro thrust and top speed bonus. 1.5 is safe, 3+ is violent, 8 is physics-breaking.",
     Callback = function(v) S.Power = v end,
 })
 
