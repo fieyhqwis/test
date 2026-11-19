@@ -23,6 +23,9 @@ local S = {
     Spam = true,
     Rate = 16,
     Cursor = true,
+    TreeSpam = false,
+    TreeId = "319446400302",
+    TreeRate = 20,
 }
 
 local Library, Window, Toggles, Options
@@ -98,6 +101,41 @@ local function animator()
     return hum and hum:FindFirstChildOfClass("Animator") or nil
 end
 
+--=========================================================
+--  TREE SPAM
+--=========================================================
+local treeHit = nil
+local choppedCount = 0
+local treeAt = 0
+
+local function treeEvent(name)
+    local rs = game:GetService("ReplicatedStorage")
+    local folder = rs:FindFirstChild("shared/network/TreeNetwork@GlobalTreeEvents")
+    return folder and folder:FindFirstChild(name) or nil
+end
+
+local function ensureTreeRemotes()
+    if treeHit then return end
+    treeHit = treeEvent("HitTree")
+    local chopped = treeEvent("TreeChopped")
+    if chopped then
+        connect(chopped.OnClientEvent, function()
+            choppedCount = choppedCount + 1
+        end)
+    end
+end
+
+local function treeSpam()
+    ensureTreeRemotes()
+    if not treeHit then return end
+    local id = tonumber(S.TreeId)
+    if not id then return end
+    local now = os.clock()
+    local rate = math.clamp(tonumber(S.TreeRate) or 20, 1, 60)
+    if now < treeAt then return end
+    treeAt = now + (1 / rate)
+    pcall(function() treeHit:FireServer(id) end)
+end
 local nextActivate = 0
 local swings = 0
 local spedTracks = 0
@@ -105,6 +143,9 @@ local spedTracks = 0
 local LOCO = { idle = true, walk = true, run = true, sprint = true, jump = true, fall = true, swim = true, climb = true, sit = true, toolnone = true }
 
 connect(RunService.Heartbeat, function()
+    if S.TreeSpam then
+        pcall(treeSpam)
+    end
     if not S.Auto then return end
 
     local holding = false
@@ -199,6 +240,40 @@ box:AddSlider("Rate", {
     Max = 40,
     Rounding = 0,
     Callback = function(v) S.Rate = v end,
+})
+
+box:AddDivider("Tree")
+
+box:AddToggle("TreeSpam", {
+    Text = "Tree spam",
+    Default = false,
+    Tooltip = "Fires HitTree for the id below. Each id is one tree.",
+    Callback = function(v)
+        S.TreeSpam = v
+        notify("Tree spam " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.TreeSpam then
+    pcall(function()
+        Toggles.TreeSpam:AddKeyPicker("TreeBind", { Text = "Tree spam bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
+box:AddInput("TreeId", {
+    Text = "Tree id",
+    Default = S.TreeId,
+    Placeholder = "319446400302",
+    Callback = function(v) S.TreeId = v end,
+})
+
+box:AddSlider("TreeRate", {
+    Text = "Hits per second",
+    Default = S.TreeRate,
+    Min = 1,
+    Max = 60,
+    Rounding = 0,
+    Callback = function(v) S.TreeRate = v end,
 })
 
 box:AddDivider("Status")
