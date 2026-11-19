@@ -23,6 +23,8 @@ local CFG = {
 local S = {
     Sens = 1.6,
     Cursor = true,
+    Reach = false,
+    ReachAdd = 1.5,
 }
 
 local Library, Window, Toggles, Options
@@ -128,6 +130,53 @@ local function restoreSens()
 end
 
 --=========================================================
+--  REACH
+--=========================================================
+local swordBase = nil
+
+local function swordConfig()
+    local rs = game:GetService("ReplicatedStorage")
+    local folder = rs:FindFirstChild("SwordCombat")
+    local mod = folder and folder:FindFirstChild("Config")
+    if not mod then return nil end
+    local ok, C = pcall(function() return require(mod) end)
+    if ok and type(C) == "table" then return C end
+    return nil
+end
+
+local function applyReach()
+    local C = swordConfig()
+    if not C or type(C.Sword) ~= "table" then return end
+
+    if not swordBase then
+        swordBase = {
+            blade = tonumber(C.Sword.BladeLength) or 3.3,
+            tip = tonumber(C.Sword.TipLength) or 0.42,
+            arm = C.Control and tonumber(C.Control.ArmReach) or 2.6,
+        }
+    end
+
+    if S.Reach then
+        local add = math.clamp(tonumber(S.ReachAdd) or 0, 0, 6)
+        C.Sword.BladeLength = swordBase.blade + add
+        C.Sword.TipLength = swordBase.tip + add * 0.25
+        if C.Control then C.Control.ArmReach = swordBase.arm + add * 0.5 end
+    else
+        C.Sword.BladeLength = swordBase.blade
+        C.Sword.TipLength = swordBase.tip
+        if C.Control then C.Control.ArmReach = swordBase.arm end
+    end
+end
+
+local function restoreReach()
+    local C = swordConfig()
+    if not (C and swordBase and type(C.Sword) == "table") then return end
+    C.Sword.BladeLength = swordBase.blade
+    C.Sword.TipLength = swordBase.tip
+    if C.Control then C.Control.ArmReach = swordBase.arm end
+end
+
+--=========================================================
 --  UI
 --=========================================================
 local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Mouse", IconName = "mouse-pointer-2" })
@@ -156,6 +205,36 @@ box:AddButton({
         applySens()
         notify("Sensitivity reset", "check")
     end,
+})
+
+box:AddDivider("Reach")
+
+box:AddToggle("Reach", {
+    Text = "Reach (sword length)",
+    Default = false,
+    Tooltip = "Adds studs to the hit sweep. Small values only, the server may compare distance.",
+    Callback = function(v)
+        S.Reach = v
+        applyReach()
+        notify("Reach " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.Reach then
+    pcall(function()
+        Toggles.Reach:AddKeyPicker("ReachBind", { Text = "Reach bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
+box:AddSlider("ReachAdd", {
+    Text = "Reach +",
+    Default = S.ReachAdd,
+    Min = 0.5,
+    Max = 6,
+    Rounding = 1,
+    Suffix = " studs",
+    Tooltip = "1-2 studs looks natural. 4+ is obvious in the kill feed.",
+    Callback = function(v) S.ReachAdd = v; applyReach() end,
 })
 
 box:AddDivider("Status")
@@ -222,6 +301,7 @@ task.spawn(function()
     task.wait(1)
     while getgenv().__rat4080Sword do
         pcall(applySens)
+        pcall(applyReach)
         pcall(function()
             status:SetText(string.format("sensitivity %.2f  ·  game default %.2f",
                 UserInputService.MouseDeltaSensitivity,
@@ -253,6 +333,7 @@ getgenv().__rat4080Sword = {
 
 Library:OnUnload(function()
     restoreSens()
+    restoreReach()
     if drawCursor then
         pcall(function()
             drawCursor.dot:Remove()
