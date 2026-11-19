@@ -128,13 +128,17 @@ end
 local function treeSpam()
     ensureTreeRemotes()
     if not treeHit then return end
-    local id = tonumber(S.TreeId)
-    if not id then return end
     local now = os.clock()
     local rate = math.clamp(tonumber(S.TreeRate) or 20, 1, 60)
     if now < treeAt then return end
     treeAt = now + (1 / rate)
-    pcall(function() treeHit:FireServer(id) end)
+
+    for piece in tostring(S.TreeId):gmatch("[^,%s]+") do
+        local id = tonumber(piece)
+        if id then
+            pcall(function() treeHit:FireServer(id) end)
+        end
+    end
 end
 local nextActivate = 0
 local swings = 0
@@ -261,9 +265,9 @@ if Toggles.TreeSpam then
 end
 
 box:AddInput("TreeId", {
-    Text = "Tree id",
+    Text = "Tree id (comma separated)",
     Default = S.TreeId,
-    Placeholder = "319446400302",
+    Placeholder = "319446400302, 319446400303",
     Callback = function(v) S.TreeId = v end,
 })
 
