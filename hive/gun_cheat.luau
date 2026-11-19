@@ -27,6 +27,8 @@ local S = {
     Rapid = true,
     RapidMult = 1.3,
     Headshot = true,
+    NoHeat = true,
+    InfAmmo = true,
 }
 
 local Library, Window, Toggles, Options
@@ -166,7 +168,12 @@ end
 local function stateFor(name, def)
     local st = base[name]
     if not st then
-        st = { rate = def.Rate, mag = def.Magazine }
+        st = {
+            rate = def.Rate,
+            mag = def.Magazine,
+            heat = def.Heat and def.Heat.PerShot,
+            overheat = def.Heat and def.Heat.OverheatSeconds,
+        }
         base[name] = st
     end
     return st
@@ -207,6 +214,11 @@ local function modDef(def, name)
         def.Magazine = S.Magazine
     end
 
+    if S.NoHeat and def.Heat then
+        def.Heat.PerShot = 0
+        def.Heat.OverheatSeconds = 0
+    end
+
     if type(st.rate) == "number" then
         local rate = S.Rapid and (st.rate * S.RapidMult) or st.rate
         if rate >= 0.2 and rate <= 500 then
@@ -231,6 +243,20 @@ local function applyAll()
     local gun = gunController()
     if gun and gun._def and gun._name then
         modDef(gun._def, gun._name)
+
+        local entry = gun._mags and gun._mags[gun._name]
+        if type(entry) == "table" then
+            if S.NoHeat then
+                entry.Heat = 0
+                entry.OverheatUntil = nil
+            end
+            if S.InfAmmo and type(entry.Ammo) == "number" then
+                local target = tonumber(gun._def.Magazine) or 0
+                if target > 0 and entry.Ammo < target then
+                    entry.Ammo = target
+                end
+            end
+        end
     end
 
     if n > 0 then patched = n end
@@ -380,6 +406,41 @@ box:AddSlider("RapidMult", {
     Callback = function(v) S.RapidMult = v; applyAll(); saveConfig() end,
 })
 
+box:AddDivider("Heat / ammo")
+
+box:AddToggle("NoHeat", {
+    Text = "No weapon heat",
+    Default = true,
+    Tooltip = "Minigun and any heat weapon never builds heat or overheats.",
+    Callback = function(v)
+        S.NoHeat = v
+        applyAll()
+        notify("No heat " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.NoHeat then
+    pcall(function()
+        Toggles.NoHeat:AddKeyPicker("HeatBind", { Text = "No heat bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
+box:AddToggle("InfAmmo", {
+    Text = "Infinite ammo (held weapon)",
+    Default = true,
+    Tooltip = "Keeps the held weapon magazine full while you shoot.",
+    Callback = function(v)
+        S.InfAmmo = v
+        notify("Infinite ammo " .. (v and "ON" or "OFF"), v and "check" or "x")
+    end,
+})
+
+if Toggles.InfAmmo then
+    pcall(function()
+        Toggles.InfAmmo:AddKeyPicker("AmmoBind", { Text = "Infinite ammo bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
+
 box:AddDivider("Headshot")
 
 box:AddToggle("Headshot", {
@@ -426,6 +487,30 @@ task.spawn(function()
                 S.Headshot and "forced" or "normal"))
         end)
         task.wait(1)
+    end
+end)
+
+-- heat and ammo need a faster tick than the config refresh
+task.spawn(function()
+    task.wait(2)
+    while getgenv().__rat4080Hive do
+        pcall(function()
+            local gun = gunController()
+            local entry = gun and gun._name and gun._mags and gun._mags[gun._name]
+            if type(entry) == "table" then
+                if S.NoHeat then
+                    entry.Heat = 0
+                    entry.OverheatUntil = nil
+                end
+                if S.InfAmmo and type(entry.Ammo) == "number" then
+                    local target = tonumber(gun._def and gun._def.Magazine) or 0
+                    if target > 0 and entry.Ammo < target then
+                        entry.Ammo = target
+                    end
+                end
+            end
+        end)
+        task.wait(0.1)
     end
 end)
 
