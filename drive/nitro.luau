@@ -21,10 +21,12 @@ local S = {
     Power = 1.3,
     Cursor = true,
     Shop = false,
+    Instant = true,
 }
 
 local Library, Window, Toggles, Options
 local Signals = {}
+local shopKeyHeld = false
 
 local function connect(sig, fn)
     local c = sig:Connect(fn)
@@ -179,6 +181,63 @@ local function nitroTick()
     applied = true
 end
 --=========================================================
+--  ITEM CONFIG (instant pickup)
+--=========================================================
+local itemBase = nil
+
+local function itemConfig()
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local cfgFolder = shared and shared:FindFirstChild("Config")
+    local mod = cfgFolder and cfgFolder:FindFirstChild("ItemConfig")
+    if not mod then return nil end
+    local ok, I = pcall(function() return require(mod) end)
+    if ok and type(I) == "table" then return I end
+    return nil
+end
+
+local function applyInstant()
+    local I = itemConfig()
+    if not I then return end
+    if not itemBase then
+        itemBase = {
+            Roll = tonumber(I.RollSeconds) or 1.8,
+            Hold = tonumber(I.RollHold) or 0.9,
+            Replace = tonumber(I.ReplaceSeconds) or 5,
+        }
+    end
+    if S.Instant then
+        I.RollSeconds = 0
+        I.RollHold = 0
+        I.ReplaceSeconds = 0
+    else
+        I.RollSeconds = itemBase.Roll
+        I.RollHold = itemBase.Hold
+        I.ReplaceSeconds = itemBase.Replace
+    end
+end
+
+local function restoreInstant()
+    local I = itemConfig()
+    if not (I and itemBase) then return end
+    I.RollSeconds = itemBase.Roll
+    I.RollHold = itemBase.Hold
+    I.ReplaceSeconds = itemBase.Replace
+end
+
+local function shopKeyOption()
+    return Options and Options.ShopKey
+end
+
+local function openShopAnywhere()
+    pcall(function() LP:SetAttribute("InShop", true) end)
+    pcall(function()
+        local Knit = require(ReplicatedStorage.Packages.Knit)
+        local sc = Knit.GetController("ShopChoiceController")
+        if sc and sc.show then sc:show(true) end
+    end)
+end
+
+--=========================================================
 --  UI
 --=========================================================
 local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Nitro", IconName = "flame" })
@@ -233,16 +292,25 @@ end
 box:AddButton({
     Text = "Open shop now",
     Icon = "shopping-cart",
-    Func = function()
-        pcall(function() LP:SetAttribute("InShop", true) end)
-        local ok = pcall(function()
-            local Knit = require(ReplicatedStorage.Packages.Knit)
-            local sc = Knit.GetController("ShopChoiceController")
-            if sc and sc.show then sc:show(true) end
-        end)
-        if not ok then notify("Shop controller missing", "x") end
+    Func = function() openShopAnywhere() end,
+})
+
+box:AddToggle("Instant", {
+    Text = "Instant ability pickup",
+    Default = true,
+    Tooltip = "Skips the roll animation, so a box you touch shows up in the slot immediately.",
+    Callback = function(v)
+        S.Instant = v
+        applyInstant()
+        notify("Instant pickup " .. (v and "ON" or "OFF"), v and "check" or "x")
     end,
 })
+
+if Toggles.Instant then
+    pcall(function()
+        Toggles.Instant:AddKeyPicker("InstantBind", { Text = "Instant pickup bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
+    end)
+end
 
 local status = box:AddLabel("waiting for car")
 
@@ -295,9 +363,19 @@ connect(game:GetService("RunService").Heartbeat, function()
     end
 end)
 
+-- item config retry: the module may not be replicated yet at load
+task.spawn(function()
+    task.wait(1)
+    while getgenv().__rat4080Drive do
+        pcall(applyInstant)
+        task.wait(0.5)
+    end
+end)
+
 local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
 
 menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = CFG.MenuKey, NoUI = true, Text = "Menu keybind" })
+menu:AddLabel("Shop key"):AddKeyPicker("ShopKey", { Default = "None", Mode = "Hold", Text = "Open shop" })
 menu:AddToggle("Cursor", { Text = "Force cursor while menu open", Default = true, Callback = function(v) S.Cursor = v end })
 menu:AddToggle("CustomCursor", { Text = "Fallback cursor", Default = true, Callback = function() end })
 menu:AddButton({ Text = "Close menu", Icon = "x", Func = function() pcall(function() Window:Toggle(false) end) end })
@@ -312,9 +390,22 @@ task.spawn(function()
     task.wait(1)
     while getgenv().__rat4080Drive do
         pcall(nitroTick)
+        pcall(applyInstant)
         pcall(function()
             if S.Shop then
                 LP:SetAttribute("InShop", true)
+            end
+        end)
+        pcall(function()
+            local key = shopKeyOption()
+            if key then
+                local ok, state = pcall(function() return key:GetState() end)
+                if ok and state and not shopKeyHeld then
+                    shopKeyHeld = true
+                    openShopAnywhere()
+                elseif ok and not state then
+                    shopKeyHeld = false
+                end
             end
         end)
         pcall(function()
@@ -334,21 +425,27 @@ end)
 
 S.Nitro = true
 S.Cursor = true
+S.Instant = true
 pcall(function() Toggles.Nitro:SetValue(true) end)
 pcall(function() Toggles.Cursor:SetValue(true) end)
+pcall(function() Toggles.Instant:SetValue(true) end)
 S.Nitro = true
 S.Cursor = true
+S.Instant = true
+applyInstant()
 
 getgenv().__rat4080Drive = {
     State = S,
     Library = Library,
     Signals = Signals,
     Car = carController,
+    ApplyInstant = applyInstant,
 }
 
 Library:OnUnload(function()
     S.Nitro = false
     restorePower()
+    restoreInstant()
     if drawCursor then
         pcall(function()
             drawCursor.dot:Remove()
