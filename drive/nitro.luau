@@ -4,6 +4,8 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local LP = Players.LocalPlayer
 
@@ -20,14 +22,10 @@ local S = {
     Nitro = true,
     Power = 1.3,
     Cursor = true,
-    Instant = true,
-    Roll = true,
-    Stack = true,
 }
 
 local Library, Window, Toggles, Options
 local Signals = {}
-local rollKeyHeld = false
 
 local function connect(sig, fn)
     local c = sig:Connect(fn)
@@ -107,30 +105,33 @@ local function carController()
     return nil
 end
 
+--=========================================================
+--  NITRO
+--=========================================================
 local tankOf = nil
+local base = nil
+local configNitro = nil
 local applied = false
-local nitroBase = nil
-local nitroConfig = nil
 
-local function configNitro()
-    if nitroConfig then return nitroConfig end
+local function abilityConfig()
+    if configNitro then return configNitro end
     local shared = ReplicatedStorage:FindFirstChild("Shared")
     local cfgFolder = shared and shared:FindFirstChild("Config")
     local mod = cfgFolder and cfgFolder:FindFirstChild("AbilityConfig")
     if not mod then return nil end
     local ok, A = pcall(function() return require(mod) end)
     if ok and type(A) == "table" and type(A.Nitro) == "table" then
-        nitroConfig = A.Nitro
+        configNitro = A.Nitro
     end
-    return nitroConfig
+    return configNitro
 end
 
 local function applyPower()
-    local nitro = configNitro()
+    local nitro = abilityConfig()
     if not nitro then return end
 
-    if not nitroBase then
-        nitroBase = {
+    if not base then
+        base = {
             Ground = tonumber(nitro.GroundThrust) or 0.45,
             Air = tonumber(nitro.AirThrust) or 1.3,
             Top = tonumber(nitro.TopSpeedAdd) or 20,
@@ -140,21 +141,21 @@ local function applyPower()
     end
 
     local p = math.clamp(tonumber(S.Power) or 1, 1, 8)
-    nitro.GroundThrust = nitroBase.Ground * p
-    nitro.AirThrust = nitroBase.Air * p
-    nitro.TopSpeedAdd = nitroBase.Top * p
-    nitro.AirThrustMax = nitroBase.AirMax * p
-    nitro.EngineScale = nitroBase.Engine * p
+    nitro.GroundThrust = base.Ground * p
+    nitro.AirThrust = base.Air * p
+    nitro.TopSpeedAdd = base.Top * p
+    nitro.AirThrustMax = base.AirMax * p
+    nitro.EngineScale = base.Engine * p
 end
 
 local function restorePower()
-    local nitro = configNitro()
-    if not (nitro and nitroBase) then return end
-    nitro.GroundThrust = nitroBase.Ground
-    nitro.AirThrust = nitroBase.Air
-    nitro.TopSpeedAdd = nitroBase.Top
-    nitro.AirThrustMax = nitroBase.AirMax
-    nitro.EngineScale = nitroBase.Engine
+    local nitro = abilityConfig()
+    if not (nitro and base) then return end
+    nitro.GroundThrust = base.Ground
+    nitro.AirThrust = base.Air
+    nitro.TopSpeedAdd = base.Top
+    nitro.AirThrustMax = base.AirMax
+    nitro.EngineScale = base.Engine
 end
 
 local function nitroTick()
@@ -164,7 +165,6 @@ local function nitroTick()
         return
     end
 
-    -- config level, works even before a car spawns
     applyPower()
 
     local car = carController()
@@ -181,90 +181,10 @@ local function nitroTick()
     end
     applied = true
 end
---=========================================================
---  ITEM CONFIG (instant pickup)
---=========================================================
-local itemBase = nil
-
-local function itemConfig()
-    local shared = ReplicatedStorage:FindFirstChild("Shared")
-    local cfgFolder = shared and shared:FindFirstChild("Config")
-    local mod = cfgFolder and cfgFolder:FindFirstChild("ItemConfig")
-    if not mod then return nil end
-    local ok, I = pcall(function() return require(mod) end)
-    if ok and type(I) == "table" then return I end
-    return nil
-end
-
-local function applyInstant()
-    local I = itemConfig()
-    if not I then return end
-    if not itemBase then
-        itemBase = {
-            Roll = tonumber(I.RollSeconds) or 1.8,
-            Hold = tonumber(I.RollHold) or 0.9,
-            Replace = tonumber(I.ReplaceSeconds) or 5,
-            MaxStack = tonumber(I.MaxStack) or 5,
-            Perma = tonumber(I.PermaCooldown) or 20,
-        }
-    end
-    if S.Instant then
-        I.RollSeconds = 0
-        I.RollHold = 0
-        I.ReplaceSeconds = 0
-    else
-        I.RollSeconds = itemBase.Roll
-        I.RollHold = itemBase.Hold
-        I.ReplaceSeconds = itemBase.Replace
-    end
-
-    if S.Stack then
-        I.MaxStack = 99
-        I.PermaCooldown = 0
-    else
-        I.MaxStack = itemBase.MaxStack
-        I.PermaCooldown = itemBase.Perma
-    end
-end
-
-local function restoreInstant()
-    local I = itemConfig()
-    if not (I and itemBase) then return end
-    I.RollSeconds = itemBase.Roll
-    I.RollHold = itemBase.Hold
-    I.ReplaceSeconds = itemBase.Replace
-end
 
 --=========================================================
---  SPIN / ROLL
+--  UI
 --=========================================================
-local KnitRef = nil
-
-local function spinController()
-    if not KnitRef then
-        local packages = ReplicatedStorage:FindFirstChild("Packages")
-        local mod = packages and packages:FindFirstChild("Knit")
-        if not mod then return nil end
-        local ok, K = pcall(function() return require(mod) end)
-        if ok and type(K) == "table" then KnitRef = K end
-    end
-    if not KnitRef then return nil end
-    local ok, sc = pcall(function() return KnitRef.GetController("SpinController") end)
-    if ok and type(sc) == "table" then return sc end
-    return nil
-end
-
-local function rollOnce()
-    local sc = spinController()
-    if not sc then return false end
-    pcall(function()
-        if sc.openViewer then sc:openViewer() end
-    end)
-    if sc._request then
-        pcall(function() sc._request:FireServer(1) end)
-    end
-    return true
-end
 local box = Tabs.Main:AddGroupbox({ Side = "Left", Name = "Nitro", IconName = "flame" })
 
 box:AddToggle("Nitro", {
@@ -289,76 +209,29 @@ box:AddSlider("Power", {
     Min = 1,
     Max = 8,
     Rounding = 1,
-    Tooltip = "Multiplies nitro thrust and top speed bonus. 1.5 is safe, 3+ is violent, 8 is physics-breaking.",
+    Tooltip = "Multiplies nitro thrust and top speed bonus. 1.5 is safe, 3+ is violent.",
     Callback = function(v) S.Power = v end,
 })
 
-box:AddDivider("Roll")
-
-box:AddToggle("Roll", {
-    Text = "Roll ability (bind)",
-    Default = false,
-    Tooltip = "Press the bind to spin the item roll without driving anywhere.",
-    Callback = function(v)
-        S.Roll = v
-        notify("Roll bind " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
-if Toggles.Roll then
-    pcall(function()
-        Toggles.Roll:AddKeyPicker("RollKey", { Text = "Roll key", Default = "None", Mode = "Hold" })
-    end)
-end
-
-box:AddButton({
-    Text = "Roll now",
-    Icon = "dice-5",
-    Func = function()
-        if not rollOnce() then notify("Spin controller missing", "x") end
-    end,
-})
-
-box:AddToggle("Instant", {
-    Text = "Instant ability pickup",
-    Default = true,
-    Tooltip = "Skips the roll animation, so a box you touch shows up in the slot immediately.",
-    Callback = function(v)
-        S.Instant = v
-        applyInstant()
-        notify("Instant pickup " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
-if Toggles.Instant then
-    pcall(function()
-        Toggles.Instant:AddKeyPicker("InstantBind", { Text = "Instant pickup bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
-    end)
-end
-
-box:AddToggle("Stack", {
-    Text = "Abilities: stack 99, no cooldown",
-    Default = true,
-    Tooltip = "Raises the client stack cap and zeroes the ability cooldown. Server may still cap counts.",
-    Callback = function(v)
-        S.Stack = v
-        applyInstant()
-        notify("Ability stack " .. (v and "ON" or "OFF"), v and "check" or "x")
-    end,
-})
-
-if Toggles.Stack then
-    pcall(function()
-        Toggles.Stack:AddKeyPicker("StackBind", { Text = "Stack bind", Default = "None", Mode = "Toggle", SyncToggleState = true })
-    end)
-end
+box:AddDivider("Status")
 
 local status = box:AddLabel("waiting for car")
 
-local uis = game:GetService("UserInputService")
+local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
+
+menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = CFG.MenuKey, NoUI = true, Text = "Menu keybind" })
+menu:AddToggle("Cursor", { Text = "Force cursor while menu open", Default = true, Callback = function(v) S.Cursor = v end })
+menu:AddButton({ Text = "Close menu", Icon = "x", Func = function() pcall(function() Window:Toggle(false) end) end })
+menu:AddButton({ Text = "Unload", Icon = "power", Func = function() pcall(function() Library:Unload() end) end })
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+--=========================================================
+--  CURSOR
+--=========================================================
 local drawCursor = nil
 
-connect(game:GetService("RunService").Heartbeat, function()
+connect(RunService.Heartbeat, function()
     if not (S.Cursor and Window.MainFrame.Visible) then
         if drawCursor then
             drawCursor.dot.Visible = false
@@ -368,11 +241,10 @@ connect(game:GetService("RunService").Heartbeat, function()
         return
     end
 
-    if uis.MouseIconEnabled ~= true then
-        pcall(function() uis.MouseIconEnabled = true end)
+    if UserInputService.MouseIconEnabled ~= true then
+        pcall(function() UserInputService.MouseIconEnabled = true end)
     end
 
-    -- drawn fallback, visible even if the property is force-reset by the game
     if not drawCursor then
         local okDot, dot = pcall(function() return Drawing.new("Circle") end)
         local okL, l1 = pcall(function() return Drawing.new("Line") end)
@@ -392,7 +264,7 @@ connect(game:GetService("RunService").Heartbeat, function()
     end
 
     if drawCursor then
-        local p = uis:GetMouseLocation()
+        local p = UserInputService:GetMouseLocation()
         drawCursor.dot.Position = Vector2.new(p.X, p.Y)
         drawCursor.dot.Visible = true
         drawCursor.h1.From = Vector2.new(p.X - 9, p.Y)
@@ -404,25 +276,6 @@ connect(game:GetService("RunService").Heartbeat, function()
     end
 end)
 
--- item config retry: the module may not be replicated yet at load
-task.spawn(function()
-    task.wait(1)
-    while getgenv().__rat4080Drive do
-        pcall(applyInstant)
-        task.wait(0.5)
-    end
-end)
-
-local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
-
-menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = CFG.MenuKey, NoUI = true, Text = "Menu keybind" })
-menu:AddToggle("Cursor", { Text = "Force cursor while menu open", Default = true, Callback = function(v) S.Cursor = v end })
-menu:AddToggle("CustomCursor", { Text = "Fallback cursor", Default = true, Callback = function() end })
-menu:AddButton({ Text = "Close menu", Icon = "x", Func = function() pcall(function() Window:Toggle(false) end) end })
-menu:AddButton({ Text = "Unload", Icon = "power", Func = function() pcall(function() Library:Unload() end) end })
-
-Library.ToggleKeybind = Options.MenuKeybind
-
 --=========================================================
 --  LOOP
 --=========================================================
@@ -430,19 +283,6 @@ task.spawn(function()
     task.wait(1)
     while getgenv().__rat4080Drive do
         pcall(nitroTick)
-        pcall(applyInstant)
-        pcall(function()
-            local key = Options and Options.RollKey
-            if key then
-                local ok, state = pcall(function() return key:GetState() end)
-                if ok and state and not rollKeyHeld then
-                    rollKeyHeld = true
-                    rollOnce()
-                elseif ok and not state then
-                    rollKeyHeld = false
-                end
-            end
-        end)
         pcall(function()
             local car = carController()
             if car then
@@ -460,30 +300,21 @@ end)
 
 S.Nitro = true
 S.Cursor = true
-S.Instant = true
-S.Stack = true
 pcall(function() Toggles.Nitro:SetValue(true) end)
 pcall(function() Toggles.Cursor:SetValue(true) end)
-pcall(function() Toggles.Instant:SetValue(true) end)
-pcall(function() Toggles.Stack:SetValue(true) end)
 S.Nitro = true
 S.Cursor = true
-S.Instant = true
-S.Stack = true
-applyInstant()
 
 getgenv().__rat4080Drive = {
     State = S,
     Library = Library,
     Signals = Signals,
     Car = carController,
-    ApplyInstant = applyInstant,
 }
 
 Library:OnUnload(function()
     S.Nitro = false
     restorePower()
-    restoreInstant()
     if drawCursor then
         pcall(function()
             drawCursor.dot:Remove()
