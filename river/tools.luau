@@ -22,6 +22,7 @@ local S = {
     Speed = 3.5,
     Spam = true,
     Rate = 16,
+    Cursor = true,
 }
 
 local Library, Window, Toggles, Options
@@ -137,15 +138,18 @@ connect(RunService.Heartbeat, function()
     end
 
     if S.Spam and holding then
-        local tool = heldTool()
-        if tool then
-            local now = os.clock()
-            local rate = math.clamp(tonumber(S.Rate) or 16, 1, 40)
-            if now >= nextActivate then
-                nextActivate = now + (1 / rate)
+        local now = os.clock()
+        local rate = math.clamp(tonumber(S.Rate) or 16, 1, 40)
+        if now >= nextActivate then
+            nextActivate = now + (1 / rate)
+            local tool = heldTool()
+            if tool then
                 pcall(function() tool:Activate() end)
-                swings = swings + 1
+            else
+                -- bare hands: the game listens to mouse input, not a tool
+                pcall(function() mouse1click() end)
             end
+            swings = swings + 1
         end
     end
 end)
@@ -204,6 +208,7 @@ local status = box:AddLabel("idle")
 local menu = Tabs.Settings:AddGroupbox({ Side = "Left", Name = "Menu", IconName = "wrench" })
 
 menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = CFG.MenuKey, NoUI = true, Text = "Menu keybind" })
+menu:AddToggle("Cursor", { Text = "Force cursor while menu open", Default = true, Callback = function(v) S.Cursor = v end })
 menu:AddButton({ Text = "Close menu", Icon = "x", Func = function() pcall(function() Window:Toggle(false) end) end })
 menu:AddButton({ Text = "Unload", Icon = "power", Func = function() pcall(function() Library:Unload() end) end })
 
@@ -224,6 +229,55 @@ task.spawn(function()
     end
 end)
 
+--=========================================================
+--  CURSOR
+--=========================================================
+local cursorDraw = nil
+local uis = game:GetService("UserInputService")
+
+connect(RunService.Heartbeat, function()
+    if not (S.Cursor and Window.MainFrame.Visible) then
+        if cursorDraw then
+            cursorDraw.v.Visible = false
+            cursorDraw.h.Visible = false
+        end
+        return
+    end
+
+    if uis.MouseIconEnabled ~= true then
+        pcall(function() uis.MouseIconEnabled = true end)
+    end
+
+    if not cursorDraw then
+        local ok1, l1 = pcall(function() return Drawing.new("Line") end)
+        local ok2, l2 = pcall(function() return Drawing.new("Line") end)
+        local ok3, dot = pcall(function() return Drawing.new("Circle") end)
+        if ok1 and ok2 and ok3 then
+            l1.Thickness = 1
+            l1.Color = Color3.fromRGB(120, 255, 160)
+            l2.Thickness = 1
+            l2.Color = Color3.fromRGB(120, 255, 160)
+            dot.Radius = 3
+            dot.Filled = true
+            dot.NumSides = 16
+            dot.Color = Color3.fromRGB(120, 255, 160)
+            cursorDraw = { v = l1, h = l2, dot = dot }
+        end
+    end
+
+    if cursorDraw then
+        local p = uis:GetMouseLocation()
+        cursorDraw.h.From = Vector2.new(p.X - 9, p.Y)
+        cursorDraw.h.To = Vector2.new(p.X + 9, p.Y)
+        cursorDraw.h.Visible = true
+        cursorDraw.v.From = Vector2.new(p.X, p.Y - 9)
+        cursorDraw.v.To = Vector2.new(p.X, p.Y + 9)
+        cursorDraw.v.Visible = true
+        cursorDraw.dot.Position = Vector2.new(p.X, p.Y)
+        cursorDraw.dot.Visible = true
+    end
+end)
+
 getgenv().__rat4080RiverTools = {
     State = S,
     Library = Library,
@@ -232,6 +286,9 @@ getgenv().__rat4080RiverTools = {
 
 Library:OnUnload(function()
     S.Auto = false
+    if cursorDraw then
+        pcall(function() cursorDraw.v:Remove() cursorDraw.h:Remove() cursorDraw.dot:Remove() end)
+    end
     local anim = animator()
     if anim then
         pcall(function()
