@@ -30,6 +30,7 @@ local S = {
     BlockByte = 69,
     BlockAll = false,
     HideLocal = false,
+    TpDistance = 30,
 }
 
 local Library, Window, Toggles, Options
@@ -45,6 +46,7 @@ local function saveConfig()
             BlockByte = S.BlockByte,
             BlockAll = S.BlockAll,
             HideLocal = S.HideLocal,
+            TpDistance = S.TpDistance,
         }))
     end)
     return ok
@@ -63,6 +65,7 @@ local function loadConfig()
     S.BlockByte = tonumber(data.BlockByte) or S.BlockByte
     S.BlockAll = data.BlockAll == true
     S.HideLocal = data.HideLocal == true
+    S.TpDistance = tonumber(data.TpDistance) or S.TpDistance
 end
 
 --=========================================================
@@ -308,6 +311,51 @@ box:AddToggle("HideLocal", {
         S.HideLocal = v
         applyHide(v and isGhostActive())
         saveConfig()
+    end,
+})
+
+local move = Tabs.Main:AddGroupbox({ Side = "Right", Name = "Movement", IconName = "move" })
+
+move:AddSlider("TpDistance", {
+    Text = "Teleport studs",
+    Default = S.TpDistance,
+    Min = 5,
+    Max = 150,
+    Rounding = 0,
+    Callback = function(v)
+        S.TpDistance = v
+        saveConfig()
+    end,
+})
+
+move:AddButton({
+    Text = "Teleport forward",
+    Icon = "arrow-up",
+    Func = function()
+        local ch = LP.Character
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local dist = tonumber(S.TpDistance) or 30
+        pcall(function()
+            hrp.CFrame = hrp.CFrame * CFrame.new(0, 0, -dist)
+        end)
+    end,
+})
+
+move:AddButton({
+    Text = "Ghost + teleport",
+    Icon = "ghost",
+    Func = function()
+        if not burst(S.Burst) then return end
+        local ch = LP.Character
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        local dist = tonumber(S.TpDistance) or 30
+        if hrp then
+            pcall(function()
+                hrp.CFrame = hrp.CFrame * CFrame.new(0, 0, -dist)
+            end)
+        end
+        Library:Notify({ Title = CFG.HubName, Description = "Ghost + TP", Icon = "zap", Time = 2 })
     end,
 })
 
