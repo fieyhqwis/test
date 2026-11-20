@@ -31,6 +31,7 @@ local S = {
     BlockAll = false,
     HideLocal = false,
     TpDistance = 30,
+    ShowBox = true,
 }
 
 local Library, Window, Toggles, Options
@@ -47,6 +48,7 @@ local function saveConfig()
             BlockAll = S.BlockAll,
             HideLocal = S.HideLocal,
             TpDistance = S.TpDistance,
+            ShowBox = S.ShowBox,
         }))
     end)
     return ok
@@ -66,6 +68,7 @@ local function loadConfig()
     S.BlockAll = data.BlockAll == true
     S.HideLocal = data.HideLocal == true
     S.TpDistance = tonumber(data.TpDistance) or S.TpDistance
+    S.ShowBox = data.ShowBox ~= false
 end
 
 --=========================================================
@@ -204,6 +207,59 @@ local function removeHook()
     hookFn = nil
 end
 
+local marker = nil
+
+local function frozenCFrame()
+    local ch = LP.Character
+    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+    return hrp and hrp.CFrame or nil
+end
+
+local function hideMarker()
+    if marker then
+        pcall(function() marker:Destroy() end)
+        marker = nil
+    end
+end
+
+local function showMarker(cf)
+    if not S.ShowBox or not cf then return end
+    hideMarker()
+
+    local part = Instance.new("Part")
+    part.Name = "RAT4080_GHOST_HITBOX"
+    part.Size = Vector3.new(4, 5, 2)
+    part.CFrame = cf
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.CastShadow = false
+    part.Material = Enum.Material.ForceField
+    part.Color = Color3.fromRGB(255, 40, 40)
+    part.Transparency = 0.45
+    part.Parent = workspace
+
+    local gui = Instance.new("BillboardGui")
+    gui.Name = "Tag"
+    gui.Size = UDim2.fromScale(7, 1.6)
+    gui.StudsOffset = Vector3.new(0, 3.8, 0)
+    gui.AlwaysOnTop = true
+    gui.Parent = part
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.fromScale(1, 1)
+    label.BackgroundTransparency = 1
+    label.TextScaled = true
+    label.Font = Enum.Font.GothamBold
+    label.TextColor3 = Color3.fromRGB(255, 95, 95)
+    label.TextStrokeTransparency = 0.35
+    label.Text = "SERVER SEES YOU HERE"
+    label.Parent = gui
+
+    marker = part
+end
+
 local function setGhost(on)
     S.Ghost = on
     if on then
@@ -213,9 +269,11 @@ local function setGhost(on)
             return false
         end
         applyHide(S.HideLocal)
+        showMarker(frozenCFrame())
     else
         ghostUntil = 0
         applyHide(false)
+        hideMarker()
     end
     return true
 end
@@ -227,6 +285,7 @@ local function burst(seconds)
     end
     ghostUntil = os.clock() + seconds
     applyHide(S.HideLocal)
+    showMarker(frozenCFrame())
     return true
 end
 
